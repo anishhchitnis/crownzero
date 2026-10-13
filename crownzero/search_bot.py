@@ -53,7 +53,8 @@ class SearchBot:
                  max_spell_targets: int = 4, weights: type[Weights] = Weights,
                  opponent=None, reply_ticks: int = 20,
                  defend_horizon_ticks: int | None = None, spawn_scaling: bool = True,
-                 pocket_spots: bool = True) -> None:
+                 pocket_spots: bool = True, reserve: float = 0.0,
+                 reserve_elixir: float = 3.0) -> None:
         """``opponent``: an object with ``reply(state, team, mask) -> action``. When given,
         every rollout lets the opponent answer ``reply_ticks`` after our move (a two-ply
         search) instead of assuming it stands still."""
@@ -61,6 +62,11 @@ class SearchBot:
         self.reply_ticks = reply_ticks
         self.spawn_scaling = spawn_scaling  # value summoned units by their own size
         self.pocket_spots = pocket_spots  # try plays in front of the king once a tower falls
+        # The first few banked elixir are worth extra: an answer to whatever comes next.
+        # Recorded 2026-10-13: four plays to the bridges took the bot to 0 elixir, and an
+        # enemy Mini P.E.K.K.A then hit our tower with nothing to answer it.
+        self.reserve = reserve
+        self.reserve_elixir = reserve_elixir
         self.base_horizon = horizon_ticks
         # Look further ahead when enemy troops are on our side: a Giant at the bridge needs
         # ~10 s to reach a tower, and a 6 s look-ahead sees no danger in it (recorded
@@ -225,7 +231,8 @@ class SearchBot:
             king = p.tower_hp[0] / max(p.tower_max_hp[0], 1)
             princesses = sum(hp / max(mx, 1) for hp, mx in zip(p.tower_hp[1:], p.tower_max_hp[1:]))
             v += sign * (w.king * king + w.princess * princesses + w.crown * p.crowns)
-        v += w.elixir * s.players[team].elixir_milli / 1000  # own elixir only
+        e = s.players[team].elixir_milli / 1000
+        v += w.elixir * e + self.reserve * min(e, self.reserve_elixir)  # own elixir only
         if s.game_over:
             if s.winner == team:
                 v += w.win

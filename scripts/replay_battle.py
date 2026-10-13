@@ -100,8 +100,10 @@ def main():
               "ingame": {"play_action": 0.0}}
     out = Path(args.out) if args.out else rec_dir.parent / f"{rec_dir.name}_replay"
     recorder = Recorder(out, dict(deck=deck, replay_of=str(rec_dir)), annotate=True)
-    live = LiveSearch([cardmap.sim_name(c) for c in deck],
-                      {"reply": "defender"} if args.opponent_model == "defender" else {})
+    kw = dict(play.REAL_GAME_SEARCH)
+    if args.opponent_model == "none":
+        kw.pop("reply")
+    live = LiveSearch([cardmap.sim_name(c) for c in deck], kw)
     bot = play.make_bot_class()(play.make_actions(deck), config,
                                 load(ROOT / "models" / "student.pt"), recorder=recorder,
                                 live=live)

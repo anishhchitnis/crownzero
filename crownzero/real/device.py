@@ -24,6 +24,7 @@ import struct
 import subprocess
 import time
 
+import numpy as np
 from loguru import logger
 from PIL import Image
 
@@ -81,21 +82,92 @@ def use_fresh_screenshots(em_module) -> None:
     E._crownzero_capture = True
 
 
-def limit_detector_threads(onnx_module, threads: int = 2) -> None:
-    """Build-A-Bot's detector runs on every CPU core, which starves the emulator."""
+def _dummy_inputs(sess, seed=0):
+    rng = np.random.default_rng(seed)
+    feed = {}
+    for i in sess.get_inputs():
+        shape = [d if isinstance(d, int) and d > 0 else 1 for d in i.shape]
+        dtype = np.float16 if "float16" in i.type else np.float32
+        feed[i.name] = rng.random(shape).astype(dtype)
+    return feed
+
+
+def _bench(sess, feed, runs=3) -> float:
+    sess.run(None, feed)  # warm-up (CoreML compiles the model on the first run)
+    times = []
+    for _ in range(runs):
+        t0 = time.perf_counter()
+        sess.run(None, feed)
+        times.append(time.perf_counter() - t0)
+    return sorted(times)[len(times) // 2]
+
+
+def _same(a, b) -> bool:
+    for x, y in zip(a, b):
+        x, y = np.asarray(x, np.float32), np.asarray(y, np.float32)
+        if x.shape != y.shape:
+            return False
+        if np.abs(x - y).mean() > 0.05 * (np.abs(y).mean() + 1e-6):
+            return False
+    return True
+
+
+def tune_detector(onnx_module, threads=(2, 4), accelerators: bool = True) -> None:
+    """Build-A-Bot's detector ran at ~670 ms a frame on a MacBook Air (recorded 2026-10-13,
+    the slowest part of each decision; 160 ms on a 2-core Linux box): its model is float16,
+    slow on Apple CPUs, and it never uses the Mac's GPU / Neural Engine (CoreML). When a
+    model is loaded, try CoreML (where onnxruntime has it) and a few CPU thread counts on
+    this machine, as it runs now (emulator included), and keep the fastest whose output
+    matches the plain CPU run."""
     ort = onnx_module.ort
     if getattr(ort.InferenceSession, "_crownzero", False):
         return
     real = ort.InferenceSession
 
-    def session(path, sess_options=None, *args, **kwargs):
-        opts = sess_options or ort.SessionOptions()
-        opts.intra_op_num_threads = threads
+    def make(path, provs, n_threads, args, kwargs):
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = n_threads
         opts.inter_op_num_threads = 1
-        return real(path, opts, *args, **kwargs)
+        return real(path, opts, *args, providers=provs, **kwargs)
+
+    def session(path, sess_options=None, *args, providers=None, **kwargs):
+        name = str(path).split("/")[-1]
+        options = [(f"CPU x{n}", ["CPUExecutionProvider"], n) for n in threads]
+        available = ort.get_available_providers()
+        if accelerators and "CoreMLExecutionProvider" in available:
+            options += [(f"CoreML {fmt}", [("CoreMLExecutionProvider", {"ModelFormat": fmt}),
+                                          "CPUExecutionProvider"], threads[0])
+                        for fmt in ("MLProgram", "NeuralNetwork")]
+        if accelerators and "CUDAExecutionProvider" in available:
+            options.append(("CUDA", ["CUDAExecutionProvider", "CPUExecutionProvider"], threads[0]))
+        best, best_t, reference, results = None, None, None, []
+        for label, provs, n in options:
+            try:
+                sess = make(path, provs, n, args, kwargs)
+                feed = _dummy_inputs(sess)
+                out = sess.run(None, feed)
+                if reference is None:
+                    reference = out  # the first option is plain CPU
+                elif not _same(out, reference):
+                    results.append(f"{label}: output differs, skipped")
+                    continue
+                t = _bench(sess, feed)
+            except Exception as e:  # an accelerator that cannot run this model
+                results.append(f"{label}: unavailable ({str(e).splitlines()[0][:60]})")
+                continue
+            results.append(f"{label}: {1000 * t:.0f} ms")
+            if best_t is None or t < best_t:
+                best, best_t = sess, t
+        logger.info(f"detector {name}: " + ", ".join(results))
+        if best is None:  # nothing worked: Build-A-Bot's own way
+            return real(path, sess_options, *args, providers=providers, **kwargs)
+        return best
 
     session._crownzero = True
     ort.InferenceSession = session
+
+
+limit_detector_threads = tune_detector  # the v4.3 name
 
 
 def deploy(emulator, card_xy, tile_xy, mode: str) -> None:

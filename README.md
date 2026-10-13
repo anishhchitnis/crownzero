@@ -34,6 +34,7 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v3 | Live search: rebuild the board seen on screen in the simulator, search it every move | 18-2 against v1; 20-0 against defend and patient |
 | v4 | Any deck, any card; current card art; tower bars smoothed; deck mismatch warning | Fixes the misread hand found in real-game recordings |
 | v4.1 | Ignores arena decorations read as troops; our own deploying troops stay ours | Fixes the phantom defence found in the next recording |
+| v4.5 | Tower check that works in any arena (learns each tower's badge); bars: median of three, never rising; a unit first seen on its owner's half keeps that side; enemies missed for a frame are remembered; the detector picks the fastest backend on the machine (CoreML on a Mac) | Fixes the four mistakes of the sixth recording (a 3-crown win in 82 s) |
 | v4.4 | Sees destroyed towers (level badge gone) and the enemy King Tower's health; plays into the pocket once a tower falls (simulator: 19-21, but 5-0 in 3-crown wins); one-frame bar dips ignored; lighter recording, shorter pause after plays | Fixes the destroyed tower read as 3% for 2 minutes in the fifth recording (a 3-crown win) |
 | v4.3 | Fresh screenshots, one-drag plays checked against the hand, detector on 2 cores; summoned units valued by their size; buildings keep their side | Fixes the 41% of plays that never happened in the fourth recording, and the Goblin Hut overvalued; 15-15 against v4.2 in a mirror match with that deck |
 | v4.2 | Memory across frames (elixir after a play, ally/enemy vote, attackers hidden behind a tower); the opponent defends inside the look-ahead | Fixes the four mistakes found in the third recording (below); in the simulator 40-40 against v4.1 and 6-14 against full-information search, same as v4.1 |
@@ -111,6 +112,18 @@ at 82% and 79%. What was still wrong:
 
 Replaying the recording, the bot now sees the left tower fall at 0:38 into the game, follows
 the king from 98% down to 7%, and in the last 30 seconds plays into the pocket.
+
+### Sixth recording (v4.4 → v4.5): a 3-crown win in 82 seconds
+
+All 13 plays happened. What was still wrong:
+
+| Mistake | Cause | Fix |
+|---|---|---|
+| Both destroyed enemy towers read as standing at 4% | A new arena with an orange-tiled floor: the gold-colour badge test passed the floor as a badge. (Replaying the third recording showed a purple floor read by the bar reader as a red bar at 3-21%.) | Each tower's badge is learned while its bar reads above half, then compared frame by frame (difference under 15 standing, 33-58 rubble, in three arenas); destroyed = badge gone and bar under 30% for 3 frames. All 8 destroyed towers in four recordings caught within a frame or two, no standing tower called destroyed |
+| A one-frame misread (77%, 54%, 77%) slipped under the 25% threshold | | A reading is the median of the last three and never rises |
+| An enemy Mini P.E.K.K.A crossed the left bridge unanswered while the bot spent its last elixir on the other lane; our tower lost 23% | Both decks had Mini P.E.K.K.A: the new enemy one was matched to a stale track of ours and inherited its "ally" votes | Tracks unseen for a frame match less readily; a unit first seen on its owner's half and read as that side starts with a strong vote; enemies on their way over missed for a frame or two are remembered. On the recorded frames the bot now answers with Minions on the bridge |
+| Four plays to the bridges in 7 s took the bot to 0 elixir, so the Mini P.E.K.K.A above met only a 3-elixir answer | The score counts banked elixir at face value, so dumping it on offence cost nothing extra | The first 3 banked elixir are worth double. Simulator A/B against v4.4: 22-18 (crowns 35-27), and 21-19 at half strength |
+| The screen reader took 673 ms a frame on the MacBook Air (the slowest part of each decision) | Build-A-Bot's float16 model on the CPU, never on the Mac's GPU / Neural Engine | When a model loads, CoreML and several CPU thread counts are timed on the machine and the fastest that gives the same output is kept |
 
 ## Baseline: the scripted bots are rock-paper-scissors
 

@@ -17,6 +17,16 @@ SideTracker    Units of cards both decks share (Giant, Knight, Mini P.E.K.K.A...
                unit first seen beside a building that spawns it (a Hut's Spear Goblins)
                starts out on that building's side.
 
+               Troops are deployed on their owner's half: a unit first seen deep on one
+               half and first read as that side's starts with a strong vote for it (an
+               enemy Mini P.E.K.K.A first seen on its side was voted ours at the bridge two
+               frames later, a tie, and went unanswered: 2026-10-13).
+               Enemy troops on their way over (on the bridge or beyond) that the detector
+               misses for a frame or two are kept where they were last seen: in a recorded
+               battle an enemy Mini P.E.K.K.A at the bridge went undetected for one frame,
+               the bot spent its last elixir on the other lane, and the Mini P.E.K.K.A then
+               hit our tower unanswered (2026-10-13).
+
 HiddenAttacker A troop standing at the foot of our tower is drawn behind it and the detector
                missed it: an enemy Mini P.E.K.K.A took our left tower from 100% to 21% in
                four seconds with no enemy detected near it. When a tower is losing health
@@ -90,9 +100,16 @@ class SideTracker:
 
     MATCH_TILES = 2.5
     KEEP_FRAMES = 3
+    AGE_PENALTY = 1.0  # tiles added per frame a track went unseen: fresh tracks match first
     VOTES = 6
     SPAWN_NEAR = 2.5  # tiles from the building that spawned it
-    SPAWN_PRIOR = 3   # worth this many frames of votes
+    SPAWN_PRIOR = 3   # outweighs any run of votes (at most 1 / (1 - DECAY) = 2.5)
+    DECAY = 0.6       # each older frame's vote counts this much less
+    PRIOR_FRAMES = 4  # starting votes only hold for a unit's first frames: a track can be
+    # taken over by a different unit of the same card where one died (recorded: enemy Archers
+    # arriving where ours fell were read as ours for 4 frames)
+    BIRTH_PRIOR = 3   # first seen on its owner's half, read as that side
+    OUR_HALF_Y, THEIR_HALF_Y = 14, 17  # the rows either side of the river (15-16)
 
     def __init__(self):
         self.tracks: list[dict] = []
@@ -116,6 +133,9 @@ class SideTracker:
                 if t["name"] != d.unit.name:
                     continue
                 dist = ((t["x"] - p.tile_x) ** 2 + (t["y"] - p.tile_y) ** 2) ** 0.5
+                # an enemy Mini P.E.K.K.A was matched to a two-frame-old track of our own
+                # Mini P.E.K.K.A and inherited its side (recorded 2026-10-13)
+                dist += self.AGE_PENALTY * max(0, self.frame - t["seen"] - 1)
                 if dist <= self.MATCH_TILES:
                     pairs.append((dist, i, j))
         pairs.sort()
@@ -133,20 +153,52 @@ class SideTracker:
             if t is None:
                 prior = 0
                 px, py = d.position.tile_x, d.position.tile_y
+                if py >= self.THEIR_HALF_Y and vote < 0:
+                    prior = -self.BIRTH_PRIOR
+                elif py <= self.OUR_HALF_Y and vote > 0:
+                    prior = self.BIRTH_PRIOR
                 for bx, by, bside, bname in spawners:
                     if (d.unit.name in SPAWNS.get(bname, ())
                             and (bx - px) ** 2 + (by - py) ** 2 <= self.SPAWN_NEAR ** 2):
                         prior = self.SPAWN_PRIOR * bside
-                t = dict(name=d.unit.name, votes=deque(maxlen=self.VOTES), prior=prior)
+                t = dict(name=d.unit.name, votes=deque(maxlen=self.VOTES), prior=prior,
+                         born=self.frame)
                 alive.append(t)
             t["x"], t["y"], t["seen"] = d.position.tile_x, d.position.tile_y, self.frame
+            t["det"] = d
             t["votes"].append(vote)
-            side = building_side(d) * 100 or sum(t["votes"]) + t.get("prior", 0)
-            tie = t.get("prior", 0) or vote  # a tie goes to the spawn prior, else to this frame
+            prior = self._prior(t)
+            side = building_side(d) * 100 or self._votes(t) + prior
+            tie = prior or vote  # a tie goes to the starting vote, else to this frame
             (out_allies if (side > 0 or (side == 0 and tie > 0)) else out_enemies).append(d)
         self.tracks = alive + [t for t in self.tracks
                                if t not in alive and self.frame - t["seen"] <= self.KEEP_FRAMES]
         return out_allies, out_enemies
+
+
+    def _votes(self, t) -> float:
+        return sum(v * self.DECAY ** k for k, v in enumerate(reversed(t["votes"])))
+
+    def _prior(self, t) -> float:
+        return t.get("prior", 0) if self.frame - t.get("born", self.frame) < self.PRIOR_FRAMES else 0
+
+    GHOST_FRAMES = 2
+    GHOST_MIN_Y = 12  # bridge, river and their half: on its way, not dying at our tower
+
+    def ghosts(self) -> list:
+        """Enemy troops missed this frame but seen in the last GHOST_FRAMES frames, still on
+        their way over: their last detections."""
+        out = []
+        for t in self.tracks:
+            age = self.frame - t["seen"]
+            if not 0 < age <= self.GHOST_FRAMES or t["y"] < self.GHOST_MIN_Y:
+                continue
+            d = t.get("det")
+            if d is None or getattr(d.unit, "category", None) == "building":
+                continue
+            if self._votes(t) + self._prior(t) < 0:
+                out.append(d)
+        return out
 
 
 class HiddenAttacker:

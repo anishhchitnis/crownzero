@@ -93,3 +93,70 @@ def test_a_spear_goblin_born_at_our_hut_is_ours():
     # an enemy spear goblin coming over the bridge is still an enemy
     allies, enemies = tr.update([hut], [det("spear_goblin", 3, 14)])
     assert [e.position.tile_x for e in enemies] == [3]
+
+
+def test_an_enemy_missed_for_a_frame_on_its_way_over_is_kept():
+    tr = SideTracker()
+    for _ in range(3):
+        tr.update([], [det("minipekka", 3, 17)])
+    tr.update([], [])  # the detector misses it
+    assert [(g.unit.name, g.position.tile_y) for g in tr.ghosts()] == [("minipekka", 17)]
+    tr.update([], [])
+    tr.update([], [])  # three frames gone: forgotten
+    assert tr.ghosts() == []
+    # one that vanished at our tower probably died there: not kept
+    tr = SideTracker()
+    for _ in range(3):
+        tr.update([], [det("knight", 3, 8)])
+    tr.update([], [])
+    assert tr.ghosts() == []
+
+
+def test_badge_watch_learns_the_badge_and_sees_rubble():
+    import numpy as np
+    from PIL import Image
+
+    from crownzero.real.towers import PRINCESS_BARS, BadgeWatch
+
+    rng = np.random.default_rng(0)
+    floor = np.full((652, 368, 3), (200, 150, 100), np.uint8)  # an orange-tiled arena
+    badge = rng.integers(0, 255, (14, 14, 3), dtype=np.uint8)
+    standing = floor.copy()
+    for x, y in PRINCESS_BARS:
+        standing[y - 5:y + 9, x - 14:x] = badge
+    w = BadgeWatch()
+    for _ in range(4):
+        assert w.update(Image.fromarray(standing), [1.0] * 4) == [True] * 4
+    rubble = standing.copy()
+    x, y = PRINCESS_BARS[3]
+    rubble[y - 5:y + 9, x - 14:x] = floor[y - 5:y + 9, x - 14:x]
+    assert w.update(Image.fromarray(rubble), [1, 1, 1, 0]) == [True, True, True, False]
+
+
+def test_an_enemy_first_seen_on_its_half_stays_an_enemy_at_the_bridge():
+    tr = SideTracker()
+    tr.update([], [det("minipekka", 3, 17)])  # just over the river on their side, theirs
+    allies, enemies = tr.update([det("minipekka", 3, 16)], [])  # one frame read as ours
+    assert [e.unit.name for e in enemies] == ["minipekka"] and allies == []
+
+
+def test_a_new_enemy_is_not_taken_for_our_stale_track_of_the_same_card():
+    tr = SideTracker()
+    for y in (14, 17, 19):  # our Mini P.E.K.K.A walking over
+        tr.update([det("minipekka", 3, y)], [])
+    tr.update([], [])  # missed a frame
+    allies, enemies = tr.update([det("minipekka", 3, 23)], [det("minipekka", 3, 17)])
+    assert [e.position.tile_y for e in enemies] == [17]
+    allies, enemies = tr.update([det("minipekka", 3, 15), det("minipekka", 3, 23)], [])
+    assert [e.position.tile_y for e in enemies] == [15]  # still theirs, one frame misread
+
+
+def test_enemy_archers_arriving_where_ours_fell_are_enemies_quickly():
+    tr = SideTracker()
+    for y in (14, 16, 18, 20, 22, 23, 23, 23):  # our Archer walks over and attacks
+        tr.update([det("archer", 4, y)], [])
+    outs = []
+    for y in (24, 23, 22, 21):  # it died; an enemy Archer walks down past that spot
+        allies, enemies = tr.update([], [det("archer", 3, y)])
+        outs.append(len(enemies))
+    assert outs[1:] == [1, 1, 1]  # at most the first frame is wrong

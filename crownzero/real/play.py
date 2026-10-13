@@ -28,12 +28,16 @@ from ..student_bot import decide
 from . import cardmap
 from .adapter import (TYPE_TO_CARD, Clock, TowerTracker, decode, legal_mask,
                       playable_slots, view_from_state)
-from .device import PlayCheck, deploy, limit_detector_threads, use_fresh_screenshots
+from .device import PlayCheck, deploy, tune_detector, use_fresh_screenshots
 from .perception import ElixirBook, HiddenAttacker, SideTracker
-from .towers import badges as tower_badges
+from .towers import BadgeWatch
 from .towers import enemy_king as read_enemy_king
 
 DISPLAY_W, DISPLAY_H = 720, 1280  # Build-A-Bot's coordinate space
+# The search settings for real games: the opponent answers our pushes in the look-ahead
+# (v4.2), and the first 3 banked elixir are worth double (v4.5; 22-18 and 21-19 at half
+# strength in simulator A/B tests, and it fixes a recorded elixir dump).
+REAL_GAME_SEARCH = {"reply": "defender", "reserve": 1.0}
 
 
 def parse_deck(text: str) -> list[str]:
@@ -143,7 +147,7 @@ def _use_current_card_art():
     cd.CardDetector._crownzero_art = True
 
 
-def make_bot_class(capture: str = "screencap", detector_threads: int = 2):
+def make_bot_class(capture: str = "screencap", tune: bool = True):
     """``capture``: "screencap" (a fresh screenshot whenever the bot looks) or "stream"
     (Build-A-Bot's video stream, which fell seconds behind in recorded battles)."""
     import clashroyalebuildabot.bot.bot as botmod
@@ -154,8 +158,8 @@ def make_bot_class(capture: str = "screencap", detector_threads: int = 2):
     _use_current_card_art()
     if capture == "screencap":
         use_fresh_screenshots(em)
-    if detector_threads:
-        limit_detector_threads(onnx_detector, detector_threads)
+    if tune:
+        tune_detector(onnx_detector)
     from clashroyalebuildabot.bot.bot import Bot
     from clashroyalebuildabot.namespaces import Screens
 
@@ -174,6 +178,7 @@ def make_bot_class(capture: str = "screencap", detector_threads: int = 2):
             self.plays = 0
             self.last_image = None
             self.towers = TowerTracker()
+            self.badges = BadgeWatch()
             self.elixir_book = ElixirBook()
             self.sides = SideTracker()
             self.hidden = HiddenAttacker()
@@ -226,6 +231,7 @@ def make_bot_class(capture: str = "screencap", detector_threads: int = 2):
                 logger.info(f"battle over: {self.play_check.summary()}")
                 self.play_check = PlayCheck()
                 self.towers.reset()
+                self.badges.reset()
                 self.sides.reset()
                 self.hidden.reset()
             self.clock.update(in_game)
@@ -243,14 +249,15 @@ def make_bot_class(capture: str = "screencap", detector_threads: int = 2):
 
             state = self._own_recent_plays(state)
             allies, enemies = self.sides.update(list(state.allies), list(state.enemies))
-            state = dataclasses.replace(state, allies=allies, enemies=enemies)
+            ghosts = self.sides.ghosts()  # enemies the detector missed for a frame or two
+            state = dataclasses.replace(state, allies=allies, enemies=enemies + ghosts)
             view = view_from_state(state, self.clock)
+            raw = [view.towers[1], view.towers[2], view.towers[4], view.towers[5]]
             marks = None
             if self.last_image is not None:
-                marks = tower_badges(self.last_image)
+                marks = self.badges.update(self.last_image, raw)
                 view.towers[3] = self.towers.update_king(read_enemy_king(self.last_image))
-            p = self.towers.update([view.towers[1], view.towers[2], view.towers[4], view.towers[5]],
-                                   marks)
+            p = self.towers.update(raw, marks)
             view.towers[1], view.towers[2], view.towers[4], view.towers[5] = p
             view.elixir = self.elixir_book.effective(view.elixir, view.double, view.overtime,
                                                      hand=list(view.hand_names))
@@ -260,6 +267,9 @@ def make_bot_class(capture: str = "screencap", detector_threads: int = 2):
                 logger.info(f"tower under attack with nothing seen near it: assuming a {name} at ({x}, {y})")
             self._check_deck(state, view)
             decision = dict(played=False)
+            if ghosts:
+                decision["ghosts"] = [[g.unit.name, g.position.tile_x, g.position.tile_y]
+                                      for g in ghosts]
             checked = self._check_plays(view)
             if checked:
                 decision["checked"] = checked
@@ -433,7 +443,9 @@ def main():
             raise SystemExit("--brain search needs the simulator: "
                              "uv pip install -e \"../crownzero[search]\"  "
                              f"(or run with --brain network). ({e})")
-        kw = {"reply": "defender"} if args.opponent_model == "defender" else {}
+        kw = dict(REAL_GAME_SEARCH)
+        if args.opponent_model == "none":
+            kw.pop("reply")
         live = LiveSearch([cardmap.sim_name(c) for c in deck], kw)
         logger.info(f"brain: live search in the simulator (opponent model: "
                     f"{args.opponent_model})")

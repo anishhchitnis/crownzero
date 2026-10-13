@@ -67,31 +67,31 @@ class Clock:
 class TowerTracker:
     """Smooths the princess-tower health bars, and decides when a tower is gone.
 
-    The reader returns 0 both for a destroyed tower and for a bar it cannot find (an 84-HP
-    tower's bar is too short to see), and taking a living tower for a destroyed one sends
-    the search badly wrong. So a 0 alone is read as "almost destroyed" (4%), and a sudden
-    drop to 0 from a healthy bar is ignored for a few frames as a misread. A tower is
-    destroyed when its level badge is gone too (see towers.py), for GONE_FRAMES frames in
-    a row; then it stays destroyed. A one-frame drop of more than DIP waits for a second
-    frame to confirm it (recorded: 0.97, 0.51, 0.92).
+    The bar reader returns 0 both for a destroyed tower and for a bar it cannot find (an
+    84-HP tower's bar is too short to see), and it sometimes reads a floor pattern as a low
+    bar. So: a reading is the median of the last three, and never rises (a tower cannot
+    heal; recorded 0.77, 0.54, 0.77). A 0 alone is "almost destroyed" (4%), and a sudden 0
+    from a healthy bar is ignored for a few frames. A tower is destroyed when its level
+    badge is gone (see towers.py) and its bar reads under GONE_BELOW, for GONE_FRAMES frames
+    in a row; then it stays destroyed.
 
     Also tracks the enemy King Tower from its bar: the median of its last readings, never
-    rising (a tower cannot heal)."""
+    rising."""
 
     ALMOST = 0.04
     HOLD = 4  # frames a healthy bar may vanish before we believe it
     GONE_FRAMES = 3
-    DIP = 0.25
+    GONE_BELOW = 0.3
 
     def __init__(self):
         self.reset()
 
     def reset(self):
         self.last = [1.0] * 4
+        self.hist = [[1.0, 1.0] for _ in range(4)]
         self.zeros = [0] * 4
         self.gone = [0] * 4
         self.dead = [False] * 4
-        self.dip = [False] * 4
         self.king = 1.0
         self.king_reads = []
 
@@ -103,7 +103,7 @@ class TowerTracker:
             if self.dead[i]:
                 out.append(0.0)
                 continue
-            if r <= 0 and badges is not None and not badges[i]:
+            if badges is not None and not badges[i] and r < self.GONE_BELOW:
                 self.gone[i] += 1
                 if self.gone[i] >= self.GONE_FRAMES:
                     self.dead[i] = True
@@ -112,13 +112,12 @@ class TowerTracker:
             else:
                 self.gone[i] = 0
             if r > 0:
-                if r < self.last[i] - self.DIP and not self.dip[i]:
-                    self.dip[i] = True  # wait for a second frame
-                    out.append(self.last[i])
-                    continue
-                self.dip[i] = False
-                self.last[i], self.zeros[i] = r, 0
-                out.append(r)
+                h = self.hist[i]
+                h.append(r)
+                del h[:-3]
+                self.last[i] = min(self.last[i], sorted(h)[len(h) // 2])
+                self.zeros[i] = 0
+                out.append(self.last[i])
                 continue
             self.zeros[i] += 1
             if self.last[i] >= 0.25 and self.zeros[i] <= self.HOLD:
