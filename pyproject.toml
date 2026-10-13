@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crownzero"
+version = "0.1.0"
+description = "An AI that learns to play Clash Royale: search teacher, distilled student network, real-game bridge"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = ["numpy>=2.0", "torch>=2.2"]
+
+[project.optional-dependencies]
+# training and evaluation in the simulator
+sim = ["royalegym==0.1.23", "royalesim==0.1.33", "pytest"]
+# playing the real game (also needs Build-A-Bot, see REAL_GAME.md)
+real = ["loguru"]
+# the search brain in the real game (rebuilds the board in the simulator every move)
+search = ["royalegym==0.1.23", "royalesim==0.1.33", "loguru"]
+
+[tool.setuptools.packages.find]
+include = ["crownzero*"]

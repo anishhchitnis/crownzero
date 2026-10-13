@@ -1,0 +1,127 @@
+"""Turn what Build-A-Bot reads off the screen into the student's View, and back.
+
+Build-A-Bot (github.com/Pbatch/ClashRoyaleBuildABot, MIT) gives, per screenshot:
+units (type + tile, ally or enemy), the 5 card slots (slot 0 = next card), which hand
+cards are ready, the elixir count, and the four princess-tower health bars as fractions.
+Its tile frame is the same as ours: x 0..17 left to right, y 0 = our back row.
+
+This module only uses plain attributes of those objects, so it can be tested without the
+game, the emulator or Build-A-Bot installed (see tests/test_real_adapter.py).
+"""
+from __future__ import annotations
+
+import numpy as np
+
+from ..board import CELLS, HAND, NX, NY, NOOP, action_index
+from ..features import (BUILD, CARD_TYPES, COST, FLY, TARGETS_BUILDINGS, TYPE_INDEX, View,
+                        unit_value, zone)
+
+# Build-A-Bot card names -> our card types (the 18 calibrated cards)
+CARD_TO_TYPE = {
+    "knight": "Knight", "archers": "Archer", "musketeer": "Musketeer", "giant": "Giant",
+    "hog_rider": "HogRider", "minions": "Minions", "baby_dragon": "BabyDragon",
+    "valkyrie": "Valkyrie", "skeleton_army": "SkeletonArmy", "cannon": "Cannon",
+    "tesla": "Tesla", "fireball": "Fireball", "zap": "Zap", "arrows": "Arrows",
+    "the_log": "Log", "prince": "Prince", "wizard": "Wizard", "goblin_barrel": "GoblinBarrel",
+}
+TYPE_TO_CARD = {v: k for k, v in CARD_TO_TYPE.items()}
+# Build-A-Bot unit names -> the card type that makes them
+UNIT_TO_TYPE = {
+    "knight": "Knight", "archer": "Archer", "musketeer": "Musketeer", "giant": "Giant",
+    "hog_rider": "HogRider", "minion": "Minions", "baby_dragon": "BabyDragon",
+    "valkyrie": "Valkyrie", "skeleton": "SkeletonArmy", "cannon": "Cannon", "tesla": "Tesla",
+    "prince": "Prince", "wizard": "Wizard", "goblin": "GoblinBarrel",
+}
+DEFAULT_UNKNOWN_VALUE = 3.0
+
+
+def _attr(obj, name, default=None):
+    v = getattr(obj, name, default)
+    return getattr(v, "value", v)  # enums -> their string value
+
+
+class Clock:
+    """The game clock, which the screen reader does not read: started on the first
+    in-game frame, reset when the battle ends."""
+
+    REGULATION_S = 180.0
+    DOUBLE_AT_S = 120.0
+
+    def __init__(self, now):
+        self.start = None
+        self.now = now
+
+    def update(self, in_game: bool):
+        if in_game and self.start is None:
+            self.start = self.now()
+        elif not in_game:
+            self.start = None
+
+    def features(self):
+        t = 0.0 if self.start is None else self.now() - self.start
+        return (min(t / self.REGULATION_S, 1.0), t >= self.DOUBLE_AT_S,
+                t >= self.REGULATION_S)
+
+
+def unit_row(detection, own: bool, unknown_values: dict | None = None):
+    unit = detection.unit
+    pos = detection.position
+    name = _attr(unit, "name")
+    t_name = UNIT_TO_TYPE.get(name)
+    t = TYPE_INDEX[t_name] if t_name else -1
+    flags = 0
+    if _attr(unit, "transport") == "air":
+        flags |= FLY
+    if _attr(unit, "category") == "building":
+        flags |= BUILD
+    if _attr(unit, "target") == "buildings":
+        flags |= TARGETS_BUILDINGS
+    if t_name:
+        value = unit_value(t_name)
+    else:
+        value = (unknown_values or {}).get(name, DEFAULT_UNKNOWN_VALUE)
+    x = int(np.clip(pos.tile_x, 0, NX - 1))
+    y = int(np.clip(pos.tile_y, 0, NY - 1))
+    return (int(own), t, x, y, flags, float(value))
+
+
+def view_from_state(state, clock: Clock, unknown_values: dict | None = None) -> View:
+    """A View from a Build-A-Bot State."""
+    v = View()
+    for d in state.allies:
+        v.units.append(unit_row(d, True, unknown_values))
+    for d in state.enemies:
+        v.units.append(unit_row(d, False, unknown_values))
+    cards = list(state.cards)
+    v.next_card = TYPE_INDEX.get(CARD_TO_TYPE.get(_attr(cards[0], "name"), ""), -1)
+    v.hand = [TYPE_INDEX.get(CARD_TO_TYPE.get(_attr(c, "name"), ""), -1) for c in cards[1:5]]
+    n = state.numbers
+    v.elixir = float(n.elixir.number)
+    # Health bars are fractions already; a bar the reader cannot find reads 0 (destroyed).
+    v.towers = [1.0, float(n.left_ally_princess_hp.number), float(n.right_ally_princess_hp.number),
+                1.0, float(n.left_enemy_princess_hp.number), float(n.right_enemy_princess_hp.number)]
+    v.clock, v.double, v.overtime = clock.features()
+    return v
+
+
+def legal_mask(view: View, ready: list[int]) -> np.ndarray:
+    """The moves we may attempt: a ready, affordable hand card on a tile the rules allow."""
+    mask = np.zeros(1 + HAND * CELLS, bool)
+    mask[NOOP] = True
+    eld, erd = view.towers[4] <= 0, view.towers[5] <= 0
+    for s in ready:
+        t = view.hand[s] if 0 <= s < HAND else -1
+        if t < 0 or COST[CARD_TYPES[t]] > view.elixir:
+            continue
+        z = zone(t, eld, erd) > 0
+        ys, xs = np.nonzero(z)
+        mask[[action_index(s, int(y), int(x)) for y, x in zip(ys, xs)]] = True
+    return mask
+
+
+def decode(action: int) -> tuple[int, int, int]:
+    """Action id -> (hand slot, tile x, tile y). Hand slot s is Build-A-Bot card index s."""
+    a = action - 1
+    slot, cell = divmod(a, CELLS)
+    y, x = divmod(cell, NX)
+    return slot, x, y

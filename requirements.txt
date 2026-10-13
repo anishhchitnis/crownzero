@@ -1,0 +1,3 @@
+royalegym==0.1.23
+royalesim==0.1.33
+numpy>=2.0
