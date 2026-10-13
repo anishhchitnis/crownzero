@@ -43,7 +43,10 @@ def synthetic_screenshot(hand_names, next_name):
                                                 SCREENSHOT_WIDTH)
     img = Image.new("RGB", (SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT), (40, 90, 40))
     for box, name in zip(CARD_CONFIG, [next_name] + hand_names):
-        card = Image.open(Path(IMAGES_DIR) / "cards" / f"{name}.jpg").convert("RGB")
+        from crownzero.real.play import CARD_ART  # live-game art where we have it
+        ours = CARD_ART / f"{name}.jpg"
+        card = Image.open(ours if ours.exists() else Path(IMAGES_DIR) / "cards" / f"{name}.jpg"
+                          ).convert("RGB")
         img.paste(card.resize((box[2] - box[0], box[3] - box[1])), box[:2])
     return img
 

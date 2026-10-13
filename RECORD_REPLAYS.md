@@ -1,30 +1,41 @@
-# Recording top-player replays (v3 training data)
+# Recording top-player replays
 
-v3 learns from top players instead of from the simulator. The game has no download of
-move-by-move data, so we record replays and extract the moves from the video with the same
-screen reader the bot plays with.
+CrownZero learns from top players by watching their replays: the same screen reader the
+bot plays with turns a replay video into plays (which card, where, when, and the board just
+before), and a network learns where and what a pro plays in each situation. This only
+records what is on the screen while you watch a replay; nothing is played or tapped.
 
-## Record one replay
+## Which replays
 
-1. In BlueStacks, open Clash Royale and find a replay of a top player:
-   **TV Royale** (top games), or tap a top ladder player's name > battle log > a replay.
-   Pick one where the player whose view you see uses mostly cards from our 18
-   (Knight, Archers, Musketeer, Giant, Hog Rider, Minions, Baby Dragon, Valkyrie,
-   Skeleton Army, Cannon, Tesla, Fireball, Zap, Arrows, The Log, Prince, Wizard,
-   Goblin Barrel) if you can find one; any top replay is still useful for the first test.
-2. Pause it at the very start if the game lets you, or just be quick.
-3. In Terminal, inside the ClashRoyaleBuildABot folder with its environment active:
+The best replays show **the top player at the bottom of the screen with their 4 cards in
+hand visible**: the hand is how the extractor knows exactly which card was played (spells
+included), so those plays are the clean training data.
 
-   ```bash
-   python -m crownzero.real.capture --device-serial 127.0.0.1:5555 --name tv_royale_1
-   ```
+* A top player's battle log: Leaderboard (trophy icon) > Top Players > tap a player >
+  Battle Log > the replay button on a battle. The replay is shown from that player's side.
+* TV Royale works too if it shows the bottom player's hand.
 
-4. Let the replay play to the end, then press **Ctrl+C** once and wait for "done".
+Any cards, any arena. Ladder (1v1) battles only, no 2v2 or special modes.
 
-The video lands in `~/Downloads/cr_replays/tv_royale_1_<date-time>/` as `part_000.mp4`,
-`part_001.mp4`, ... Recording happens inside the emulator, so moving or covering the
-BlueStacks window does not matter.
+## Record
 
-## Send it
+In Terminal, inside the ClashRoyaleBuildABot folder with its environment active:
 
-Zip that folder and drop it in the chat, or tell Claude to fetch it from your Mac.
+```bash
+python -m crownzero.real.capture --device-serial 127.0.0.1:5555 --name pro_1
+```
+
+Start the replay, let it play to the end, then press **Ctrl+C** once and wait for "done".
+One replay per run, with a new name each time (`pro_2`, `pro_3`, ...).
+
+The video lands in `~/Downloads/cr_replays/pro_1_<date-time>/` as `part_000.mp4`, ...
+
+## Check one
+
+```bash
+python -m crownzero.replays.extract ~/Downloads/cr_replays/pro_1_<date-time>
+```
+
+prints how many plays it found for each side and which cards. A full 3-minute battle gives
+about 25-40 plays for the bottom player; far fewer means the hand is not visible in that
+kind of replay.
