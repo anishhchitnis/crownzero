@@ -36,7 +36,49 @@ def test_tower_bar_that_vanishes_is_not_a_destroyed_tower():
     # a dying tower read as 0: almost destroyed, never gone
     t = TowerTracker()
     t.update([0.1, 1, 1, 1])
+    t.update([0.1, 1, 1, 1])  # a drop that big needs a second frame
     assert t.update([0.0, 1, 1, 1])[0] == TowerTracker.ALMOST
+    # ... even for many frames, while its level badge is on screen
+    for _ in range(6):
+        assert t.update([0.0, 1, 1, 1], [True] * 4)[0] == TowerTracker.ALMOST
+
+
+def test_a_tower_with_no_bar_and_no_badge_is_destroyed():
+    t = TowerTracker()
+    t.update([1, 1, 0.2, 1])
+    t.update([1, 1, 0.0, 1], [True, True, False, True])
+    t.update([1, 1, 0.0, 1], [True, True, False, True])
+    assert t.update([1, 1, 0.0, 1], [True, True, False, True])[2] == 0.0
+    # destroyed for good, even if something gold stands on the rubble later
+    assert t.update([1, 1, 0.0, 1], [True] * 4)[2] == 0.0
+
+
+def test_a_one_frame_dip_is_not_believed():
+    t = TowerTracker()
+    t.update([1, 0.97, 1, 1])
+    assert t.update([1, 0.51, 1, 1])[1] == 0.97
+    assert t.update([1, 0.92, 1, 1])[1] == 0.92
+
+
+def test_enemy_king_health_from_its_bar():
+    import numpy as np
+    from PIL import Image
+
+    from crownzero.real.towers import KING_BAR_ROWS, KING_BAR_X, enemy_king
+
+    a = np.full((652, 368, 3), (90, 140, 60), np.uint8)  # grass
+    assert enemy_king(Image.fromarray(a)) is None  # no bar until the king is hit
+    x0, x1 = KING_BAR_X
+    y0, y1 = KING_BAR_ROWS
+    split = x0 + round(0.4 * (x1 - x0))
+    a[y0:y1, x0:split] = (224, 35, 93)
+    a[y0:y1, split:x1] = (90, 49, 68)
+    assert abs(enemy_king(Image.fromarray(a)) - 0.4) < 0.03
+    t = TowerTracker()
+    assert t.update_king(None) == 1.0
+    t.update_king(0.4)
+    assert abs(t.update_king(0.4) - 0.4) < 1e-9
+    assert abs(t.update_king(0.9) - 0.4) < 1e-9  # never rises
 
 
 def test_live_search_plays_cards_outside_the_18():

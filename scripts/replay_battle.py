@@ -99,7 +99,7 @@ def main():
               "visuals": {"save_labels": False, "save_images": False, "show_images": False},
               "ingame": {"play_action": 0.0}}
     out = Path(args.out) if args.out else rec_dir.parent / f"{rec_dir.name}_replay"
-    recorder = Recorder(out, dict(deck=deck, replay_of=str(rec_dir)))
+    recorder = Recorder(out, dict(deck=deck, replay_of=str(rec_dir)), annotate=True)
     live = LiveSearch([cardmap.sim_name(c) for c in deck],
                       {"reply": "defender"} if args.opponent_model == "defender" else {})
     bot = play.make_bot_class()(play.make_actions(deck), config,
@@ -138,6 +138,7 @@ def main():
         if r["frame"] in args.explain.split(","):
             explain(live, bot, recorder)
         assert len(fake.clicks) - n_before in (0, 2)
+    recorder.flush()
     print(f"\n{changed}/{len(frames)} decisions changed. Annotated frames in {recorder.dir}")
 
 

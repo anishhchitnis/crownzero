@@ -4,15 +4,19 @@
 
 For every decision it writes, into recordings/<date-time>/:
   NNNNN.jpg      the frame the screen reader looked at (368 x 652, as Build-A-Bot sees it)
-  NNNNN_ann.jpg  the same frame, twice the size, with the tile grid, every detected unit
-                 (blue = ours, red = theirs, with its tile), the hand, elixir and the
-                 bot's decision drawn on top
+  NNNNN_ann.jpg  (only with annotate=True, e.g. from scripts/replay_battle.py) the same
+                 frame, twice the size, with the tile grid, every detected unit (blue = ours,
+                 red = theirs, with its tile), the hand, elixir and the decision drawn on top
+                 Drawing these on every decision slowed the live bot down, so it no longer
+                 does; images are written by a background thread.
   steps.jsonl    one line per decision: detections, cards, elixir, tower bars, the network's
                  view, and the decision (card, tile, P(wait), win estimate)
 """
 from __future__ import annotations
 
 import json
+import queue
+import threading
 import time
 from pathlib import Path
 
@@ -39,7 +43,10 @@ def _num(n):
 
 
 class Recorder:
-    def __init__(self, root, meta: dict):
+    def __init__(self, root, meta: dict, annotate: bool = False):
+        self.annotate = annotate
+        self.images: queue.Queue = queue.Queue(maxsize=64)
+        threading.Thread(target=self._writer, daemon=True).start()
         self.dir = Path(root) / time.strftime("%Y%m%d-%H%M%S")
         self.dir.mkdir(parents=True, exist_ok=True)
         from crownzero import __version__
@@ -50,21 +57,44 @@ class Recorder:
         self.n = 0
         self.t0 = time.monotonic()
 
+    def _writer(self):
+        while True:
+            job = self.images.get()
+            try:
+                job()
+            except Exception:  # a frame that fails to save must not stop the bot
+                pass
+            self.images.task_done()
+
+    def _save(self, image, path, quality=85):
+        image = image.copy()
+        try:
+            self.images.put_nowait(lambda: image.convert("RGB").save(path, quality=quality))
+        except queue.Full:  # the disk cannot keep up: drop this frame, not the game
+            pass
+
+    def flush(self):
+        self.images.join()
+
     def frame(self, image, tag: str, every: int = 3, limit: int = 40):
         """Save a raw frame (e.g. a screen the reader did not recognise), sparingly."""
         n = self.tags = getattr(self, "tags", {})
         n[tag] = n.get(tag, 0) + 1
         if image is None or n[tag] % every != 1 or n[tag] > every * limit:
             return
-        image.convert("RGB").save(self.dir / f"{tag}_{n[tag]:04d}.jpg", quality=85)
+        name = f"{tag}_{n[tag]:04d}.jpg"
+        self._save(image, self.dir / name)
+        with (self.dir / "screens.jsonl").open("a") as f:  # e.g. the result screen
+            f.write(json.dumps(dict(t=round(time.monotonic() - self.t0, 2), file=name)) + "\n")
 
     def step(self, image, state, view, decision: dict):
         self.n += 1
         stem = f"{self.n:05d}"
         if image is not None:
-            image.convert("RGB").save(self.dir / f"{stem}.jpg", quality=85)
-            self._annotated(image, state, view, decision).save(
-                self.dir / f"{stem}_ann.jpg", quality=80)
+            self._save(image, self.dir / f"{stem}.jpg")
+            if self.annotate:
+                self._save(self._annotated(image, state, view, decision),
+                           self.dir / f"{stem}_ann.jpg", quality=80)
         dets = lambda ds: [dict(name=d.unit.name, tile=[d.position.tile_x, d.position.tile_y],  # noqa: E731
                                 conf=round(float(d.position.conf), 3),
                                 bbox=list(d.position.bbox)) for d in ds]

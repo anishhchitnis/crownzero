@@ -65,15 +65,23 @@ class Clock:
 
 
 class TowerTracker:
-    """Smooths the princess-tower health bars. The reader returns 0 both for a destroyed
-    tower and for a bar it cannot find (an 84-HP tower's bar is too short to see), and
-    taking a living tower for a destroyed one sends the search badly wrong (it then thinks
-    it may place troops on the enemy's side, or that it has no tower to defend). So a 0 is
-    read as "almost destroyed" (4%), never as gone, and a sudden drop to 0 from a healthy
-    bar is ignored for a few frames as a misread."""
+    """Smooths the princess-tower health bars, and decides when a tower is gone.
+
+    The reader returns 0 both for a destroyed tower and for a bar it cannot find (an 84-HP
+    tower's bar is too short to see), and taking a living tower for a destroyed one sends
+    the search badly wrong. So a 0 alone is read as "almost destroyed" (4%), and a sudden
+    drop to 0 from a healthy bar is ignored for a few frames as a misread. A tower is
+    destroyed when its level badge is gone too (see towers.py), for GONE_FRAMES frames in
+    a row; then it stays destroyed. A one-frame drop of more than DIP waits for a second
+    frame to confirm it (recorded: 0.97, 0.51, 0.92).
+
+    Also tracks the enemy King Tower from its bar: the median of its last readings, never
+    rising (a tower cannot heal)."""
 
     ALMOST = 0.04
     HOLD = 4  # frames a healthy bar may vanish before we believe it
+    GONE_FRAMES = 3
+    DIP = 0.25
 
     def __init__(self):
         self.reset()
@@ -81,11 +89,34 @@ class TowerTracker:
     def reset(self):
         self.last = [1.0] * 4
         self.zeros = [0] * 4
+        self.gone = [0] * 4
+        self.dead = [False] * 4
+        self.dip = [False] * 4
+        self.king = 1.0
+        self.king_reads = []
 
-    def update(self, readings):
+    def update(self, readings, badges=None):
+        """``readings``: [ally L, ally R, enemy L, enemy R] from the bar reader;
+        ``badges``: whether each tower's level badge is on screen (None: unknown)."""
         out = []
         for i, r in enumerate(readings):
+            if self.dead[i]:
+                out.append(0.0)
+                continue
+            if r <= 0 and badges is not None and not badges[i]:
+                self.gone[i] += 1
+                if self.gone[i] >= self.GONE_FRAMES:
+                    self.dead[i] = True
+                    out.append(0.0)
+                    continue
+            else:
+                self.gone[i] = 0
             if r > 0:
+                if r < self.last[i] - self.DIP and not self.dip[i]:
+                    self.dip[i] = True  # wait for a second frame
+                    out.append(self.last[i])
+                    continue
+                self.dip[i] = False
                 self.last[i], self.zeros[i] = r, 0
                 out.append(r)
                 continue
@@ -95,6 +126,13 @@ class TowerTracker:
             else:
                 out.append(min(self.last[i], self.ALMOST))
         return out
+
+    def update_king(self, reading):
+        if reading is not None:
+            self.king_reads = (self.king_reads + [reading])[-3:]
+            if len(self.king_reads) >= 2:
+                self.king = min(self.king, sorted(self.king_reads)[len(self.king_reads) // 2])
+        return self.king
 
 
 def unit_row(detection, own: bool, unknown_values: dict | None = None):

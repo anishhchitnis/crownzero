@@ -34,6 +34,7 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v3 | Live search: rebuild the board seen on screen in the simulator, search it every move | 18-2 against v1; 20-0 against defend and patient |
 | v4 | Any deck, any card; current card art; tower bars smoothed; deck mismatch warning | Fixes the misread hand found in real-game recordings |
 | v4.1 | Ignores arena decorations read as troops; our own deploying troops stay ours | Fixes the phantom defence found in the next recording |
+| v4.4 | Sees destroyed towers (level badge gone) and the enemy King Tower's health; plays into the pocket once a tower falls (simulator: 19-21, but 5-0 in 3-crown wins); one-frame bar dips ignored; lighter recording, shorter pause after plays | Fixes the destroyed tower read as 3% for 2 minutes in the fifth recording (a 3-crown win) |
 | v4.3 | Fresh screenshots, one-drag plays checked against the hand, detector on 2 cores; summoned units valued by their size; buildings keep their side | Fixes the 41% of plays that never happened in the fourth recording, and the Goblin Hut overvalued; 15-15 against v4.2 in a mirror match with that deck |
 | v4.2 | Memory across frames (elixir after a play, ally/enemy vote, attackers hidden behind a tower); the opponent defends inside the look-ahead | Fixes the four mistakes found in the third recording (below); in the simulator 40-40 against v4.1 and 6-14 against full-information search, same as v4.1 |
 
@@ -96,6 +97,21 @@ was deciding on was 4-6 s old ("2:40 left", then 2.1 s later "2:33").
 | Goblin Hut played first again and again | Units a card summons carry its id: each 133-hp Spear Goblin from a Hut was scored as a whole 4-elixir Hut (a Witch's skeletons likewise) | A summoned unit is worth its share of the card's own unit, by hitpoints. In the recorded Mini P.E.K.K.A defence the Hut's score fell from 32.9 to 24.4, next to the Mini P.E.K.K.A's 23.3 |
 | Our Goblin Hut and its Spear Goblins read as enemies (30 flips) | Both decks were nearly the same cards | A building is on its owner's half; a unit first seen beside a building that spawns it starts on that building's side (20 flips on the same frames) |
 
+### Fifth recording (v4.3 → v4.4): a 3-crown win, all 31 plays happened
+
+With v4.3 every play happened (31 of 31, from 17 of 29) and the bot won 3-0 with its towers
+at 82% and 79%. What was still wrong:
+
+| Mistake | Cause | Fix |
+|---|---|---|
+| The enemy's left tower, destroyed at 2:23, was believed to stand at 3% for the rest of the game; troops kept going to "finish" it, and none went into the pocket in front of the King Tower | The bar reader returns 0 for a destroyed tower and for a bar too short to read, so 0 was read as "almost destroyed". In the simulator a tower at 3% still stands and blocks the pocket | A standing tower always shows its level badge (gold shield) however low its health; a tower is destroyed when badge and bar are both gone for 3 frames. The search also tries pocket spots once a tower is down |
+| The enemy King Tower was seen at full health throughout, even at 780 HP | The reader does not read the king's bar | Its bar at the top of the screen is read (median of the last readings, never rising) |
+| One frame read our right tower at 51% between 97% and 92% | Bar misread | A drop of more than 25% in one frame waits for a second frame |
+| A decision only every 1.2 s | A fresh screenshot costs ~0.3 s, the recorder drew and saved two images per decision, and the bot paused 0.6 s after each play | Images are saved in the background and annotated frames are left to replay_battle.py; the pause is 0.3 s; the screen reader's time is now logged |
+
+Replaying the recording, the bot now sees the left tower fall at 0:38 into the game, follows
+the king from 98% down to 7%, and in the last 30 seconds plays into the pocket.
+
 ## Baseline: the scripted bots are rock-paper-scissors
 
 Round robin of the five scripted bots that ship with RoyaleGym (40 games per pairing):
@@ -141,7 +157,7 @@ crownzero/model.py, train.py the imitation network (v1/v2)
 crownzero/arena.py           parallel matches with seat-balanced Wilson intervals
 crownzero/real/              the real game: Build-A-Bot bridge, card names, recorder,
                              memory across frames (perception.py), screenshots and
-                             plays (device.py)
+                             plays (device.py), tower badges and king health (towers.py)
 scripts/analyze_battle.py    post-match report of a recorded battle
 scripts/replay_battle.py     the current bot on a recorded battle's frames
 tests/                       unit and end-to-end tests (no phone needed)

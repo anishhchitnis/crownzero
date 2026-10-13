@@ -30,6 +30,8 @@ from .adapter import (TYPE_TO_CARD, Clock, TowerTracker, decode, legal_mask,
                       playable_slots, view_from_state)
 from .device import PlayCheck, deploy, limit_detector_threads, use_fresh_screenshots
 from .perception import ElixirBook, HiddenAttacker, SideTracker
+from .towers import badges as tower_badges
+from .towers import enemy_king as read_enemy_king
 
 DISPLAY_W, DISPLAY_H = 720, 1280  # Build-A-Bot's coordinate space
 
@@ -160,7 +162,7 @@ def make_bot_class(capture: str = "screencap", detector_threads: int = 2):
     _quiet_hotkey(botmod)
 
     class NetworkBot(Bot):
-        def __init__(self, actions, config, net, play_threshold=0.5, after_play_s=0.6,
+        def __init__(self, actions, config, net, play_threshold=0.5, after_play_s=0.3,
                      recorder=None, live=None, input_mode="auto"):
             super().__init__(actions=actions, config=config)
             self.net = net
@@ -195,7 +197,9 @@ def make_bot_class(capture: str = "screencap", detector_threads: int = 2):
         def compute_state(self):
             screenshot = self.emulator.take_screenshot()
             self.last_image = screenshot
+            t0 = time.perf_counter()
             state = self.detector.run(screenshot)
+            self.detect_ms = round(1000 * (time.perf_counter() - t0))
             if state is not None:
                 self.visualizer.run(screenshot, state)
             return state
@@ -241,7 +245,12 @@ def make_bot_class(capture: str = "screencap", detector_threads: int = 2):
             allies, enemies = self.sides.update(list(state.allies), list(state.enemies))
             state = dataclasses.replace(state, allies=allies, enemies=enemies)
             view = view_from_state(state, self.clock)
-            p = self.towers.update([view.towers[1], view.towers[2], view.towers[4], view.towers[5]])
+            marks = None
+            if self.last_image is not None:
+                marks = tower_badges(self.last_image)
+                view.towers[3] = self.towers.update_king(read_enemy_king(self.last_image))
+            p = self.towers.update([view.towers[1], view.towers[2], view.towers[4], view.towers[5]],
+                                   marks)
             view.towers[1], view.towers[2], view.towers[4], view.towers[5] = p
             view.elixir = self.elixir_book.effective(view.elixir, view.double, view.overtime,
                                                      hand=list(view.hand_names))
@@ -257,6 +266,8 @@ def make_bot_class(capture: str = "screencap", detector_threads: int = 2):
             if getattr(self.emulator, "capture_ms", None) is not None:
                 decision["capture_ms"] = self.emulator.capture_ms
                 self._watch_capture(self.emulator.capture_ms)
+            if getattr(self, "detect_ms", None) is not None:
+                decision["detect_ms"] = self.detect_ms
             if self.live is not None:
                 slots = playable_slots(view, list(state.ready))
                 if slots:

@@ -22,12 +22,14 @@ import time
 import numpy as np
 from royalegym import EntityKind
 
-from .board import NOOP, NX, NY, RIVER_Y, action_index, card_table, is_tower, own_tile
+from .board import (NOOP, NX, NY, PRINCESS_TOWER, RIVER_Y, action_index, card_table, is_tower,
+                    own_tile)
 
 # Spots for troops, own-frame tile (x, y). Princess towers sit at x 3.5 / 14.5, y 6.5;
 # the king at x 9, y 3; bridges at x ~3 and ~14; the river at rows 15-16.
 TROOP_SPOTS = [(3, 10), (14, 10), (8, 8), (9, 8), (3, 14), (14, 14), (8, 1), (9, 1)]
 BUILDING_SPOTS = [(8, 9), (9, 9), (8, 11), (9, 11)]
+POCKET_SPOTS = ([(3, 20), (5, 19)], [(14, 20), (12, 19)])  # left, right lane
 SNAP_LIMIT = 3.0  # tiles: an anchor further than this from any legal cell is dropped
 
 
@@ -50,13 +52,15 @@ class SearchBot:
     def __init__(self, horizon_ticks: int = 120, margin: float = 0.05,
                  max_spell_targets: int = 4, weights: type[Weights] = Weights,
                  opponent=None, reply_ticks: int = 20,
-                 defend_horizon_ticks: int | None = None, spawn_scaling: bool = True) -> None:
+                 defend_horizon_ticks: int | None = None, spawn_scaling: bool = True,
+                 pocket_spots: bool = True) -> None:
         """``opponent``: an object with ``reply(state, team, mask) -> action``. When given,
         every rollout lets the opponent answer ``reply_ticks`` after our move (a two-ply
         search) instead of assuming it stands still."""
         self.opponent = opponent
         self.reply_ticks = reply_ticks
         self.spawn_scaling = spawn_scaling  # value summoned units by their own size
+        self.pocket_spots = pocket_spots  # try plays in front of the king once a tower falls
         self.base_horizon = horizon_ticks
         # Look further ahead when enemy troops are on our side: a Giant at the bridge needs
         # ~10 s to reach a tower, and a 6 s look-ahead sees no danger in it (recorded
@@ -139,6 +143,7 @@ class SearchBot:
         me = state.players[team]
         enemies = []  # (x, y, value) in own-frame tiles, non-tower enemy units
         enemy_towers = []
+        princess_x = []  # own-frame x of the enemy princess towers still standing
         for ent in state.entities:
             if ent.team == team:
                 continue
@@ -146,6 +151,8 @@ class SearchBot:
             if is_tower(ent):
                 if ent.hp > 0:
                     enemy_towers.append((x, y))
+                    if ent.kind == PRINCESS_TOWER:
+                        princess_x.append(x)
                 continue
             value = self._unit_value(ent)
             enemies.append((x, y, value * ent.hp / max(ent.max_hp, 1)))
@@ -158,6 +165,16 @@ class SearchBot:
         scored.sort(reverse=True)
         spell_spots = [(x, y) for _, x, y in scored[: self.max_spell_targets]]
         tower_spots = list(enemy_towers)
+
+        # Pocket spots: once an enemy princess tower is down, troops may be placed on its side
+        # of the arena, right in front of the King Tower (recorded 2026-10-13: the bot never
+        # did, partly because it thought the destroyed tower still stood).
+        pockets = []
+        if self.pocket_spots:
+            if not any(x < NX / 2 for x in princess_x):
+                pockets += POCKET_SPOTS[0]
+            if not any(x >= NX / 2 for x in princess_x):
+                pockets += POCKET_SPOTS[1]
 
         # Reactive spots: meet enemy units that are on, or heading into, our half.
         reactive = []
@@ -182,7 +199,7 @@ class SearchBot:
             elif kind == "BUILDING":
                 anchors = BUILDING_SPOTS + [(x, max(y - 4, 2)) for x, y in reactive[::2]]
             else:
-                anchors = TROOP_SPOTS + reactive
+                anchors = TROOP_SPOTS + reactive + pockets
             cells = np.argwhere(plane > 0)  # rows of (y, x)
             for ax, ay in anchors:
                 d2 = (cells[:, 0] - ay) ** 2 + (cells[:, 1] - ax) ** 2

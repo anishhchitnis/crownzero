@@ -107,8 +107,10 @@ def test_bot_reads_hand_and_plays(monkeypatch, tmp_path, size, brain):
     k = size[1] / 1280  # taps are scaled to the device's real resolution
     assert card_xy[1] > 1000 * k and tile_xy[1] < 1000 * k  # tapped a card, then the arena
     assert card_xy[0] < size[0] and tile_xy[0] < size[0]
-    # the recording has the frame, the annotated frame and a log line per decision
-    assert (rec.dir / "00001.jpg").exists() and (rec.dir / "00001_ann.jpg").exists()
+    # the recording has the frame and a log line per decision (annotated frames only on
+    # request: drawing them slowed the live bot)
+    rec.flush()
+    assert (rec.dir / "00001.jpg").exists() and not (rec.dir / "00001_ann.jpg").exists()
     lines = (rec.dir / "steps.jsonl").read_text().splitlines()
     assert lines and '"played": true' in lines[-1]
 

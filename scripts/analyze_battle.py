@@ -157,8 +157,20 @@ def analyze(folder: Path):
             flag("NO PLAY", i, f"{d['card']} at {tuple(d['tile'])} never left the hand")
     print(f"plays that happened: {len(plays) - len(failed)}/{len(plays)}")
     cap = [r["decision"]["capture_ms"] for r in rows if r["decision"].get("capture_ms")]
+    det = [r["decision"]["detect_ms"] for r in rows if r["decision"].get("detect_ms")]
     if cap:
-        print(f"screenshot time: median {statistics.median(cap):.0f} ms, max {max(cap)} ms")
+        print(f"screenshot time: median {statistics.median(cap):.0f} ms, max {max(cap)} ms"
+              + (f"; screen reader median {statistics.median(det):.0f} ms" if det else ""))
+    # the result: the first screen saved after the last battle frame (the battle log ends
+    # when the battle screen does, so the crowns are only on that screen)
+    after = []
+    if (folder / "screens.jsonl").exists():
+        after = [json.loads(x)["file"] for x in open(folder / "screens.jsonl")
+                 if json.loads(x)["t"] > rows[-1]["t"]]
+    else:  # older recordings: unknown frames numbered after the battle's start
+        after = sorted(p.name for p in folder.glob("unknown_*.jpg"))[1:2]
+    if after:
+        print(f"result screen: {folder / after[0]}  <- look at it for the crowns")
     spent = [r["elixir"] for r in plays if r["elixir"] is not None]
     if spent:
         print(f"elixir when playing: median {statistics.median(spent):.0f}; "
