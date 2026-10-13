@@ -49,12 +49,18 @@ class SearchBot:
 
     def __init__(self, horizon_ticks: int = 120, margin: float = 0.05,
                  max_spell_targets: int = 4, weights: type[Weights] = Weights,
-                 opponent=None, reply_ticks: int = 20) -> None:
+                 opponent=None, reply_ticks: int = 20,
+                 defend_horizon_ticks: int | None = None) -> None:
         """``opponent``: an object with ``reply(state, team, mask) -> action``. When given,
         every rollout lets the opponent answer ``reply_ticks`` after our move (a two-ply
         search) instead of assuming it stands still."""
         self.opponent = opponent
         self.reply_ticks = reply_ticks
+        self.base_horizon = horizon_ticks
+        # Look further ahead when enemy troops are on our side: a Giant at the bridge needs
+        # ~10 s to reach a tower, and a 6 s look-ahead sees no danger in it (recorded
+        # 2026-10-13: Archers sent to the other bridge while a Giant walked into our tower).
+        self.defend_horizon = defend_horizon_ticks or horizon_ticks
         self.horizon = horizon_ticks
         self.margin = margin  # a play must beat waiting by this much elixir-equivalent
         self.max_spell_targets = max_spell_targets
@@ -76,6 +82,13 @@ class SearchBot:
             if self.opponent is not None and getattr(self.opponent, "cards", None) is None:
                 self.opponent.bind(engine)
         state = env.battle_state
+        self.horizon = self.base_horizon
+        if self.defend_horizon != self.base_horizon:
+            for ent in state.entities:
+                if ent.team != team and not is_tower(ent):
+                    if own_tile(self.arena, team, ent.x, ent.y)[1] < 16:
+                        self.horizon = self.defend_horizon
+                        break
         cands = self._candidates(state, team, planes)
         if not cands:
             return NOOP

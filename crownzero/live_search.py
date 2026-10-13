@@ -56,7 +56,11 @@ class LiveSearch:
         self.arena = self.engine.arena()
         self.mutator = _Fixed()
         self.env = ClashParallelEnv(engine=self.engine, state_mutator=self.mutator)
-        self.search = SearchBot(**(search_kwargs or {}))
+        kw = dict(search_kwargs or {})
+        if "reply" in kw:  # the opponent answers our play inside the rollouts
+            from .opponent_model import make_opponent
+            kw["opponent"] = make_opponent(kw.pop("reply"))
+        self.search = SearchBot(**kw)
         self.deck = list(deck)
         self.enemy_deck = [self.by_name[n] for n in CURATED["giant"]]
         self.rng = np.random.default_rng(seed)

@@ -34,6 +34,7 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v3 | Live search: rebuild the board seen on screen in the simulator, search it every move | 18-2 against v1; 20-0 against defend and patient |
 | v4 | Any deck, any card; current card art; tower bars smoothed; deck mismatch warning | Fixes the misread hand found in real-game recordings |
 | v4.1 | Ignores arena decorations read as troops; our own deploying troops stay ours | Fixes the phantom defence found in the next recording |
+| v4.2 | Memory across frames (elixir after a play, ally/enemy vote, attackers hidden behind a tower); the opponent defends inside the look-ahead | Fixes the four mistakes found in the third recording (below); in the simulator 40-40 against v4.1 and 6-14 against full-information search, same as v4.1 |
 
 ### What the real-game recordings showed (v3 → v4)
 
@@ -63,6 +64,24 @@ in-game card art where Build-A-Bot's is outdated, smooths the tower bars and war
 the hand on screen doesn't match the deck. Replaying the recorded battle through v4, the
 hand and the ally/enemy split read correctly.
 
+### Third recording (v4.1 → v4.2)
+
+`scripts/analyze_battle.py` flags every unanswered threat, tower hit, elixir leak and odd
+play in a recording; `scripts/replay_battle.py` runs the current bot on the recorded
+frames to show what it would now do in each of those moments. The third battle had four
+kinds of mistakes:
+
+| Mistake | Cause | Fix |
+|---|---|---|
+| "Not enough Elixir!": cards tapped and refused | The screenshot after a play still shows the elixir from before it | Elixir after a play is capped at what we had minus the cost plus regeneration; a tap that didn't land (card still in its slot) is forgotten |
+| An enemy Mini P.E.K.K.A took a tower from 100% to 21% in 4 s, unanswered | Standing at the foot of the tower it is drawn behind it, and the detector missed it | A tower losing health with nothing seen near it gets an attacker assumed in front of it |
+| Our Giant and Knight read as enemies now and then (20 flips) | Both decks had them; the side classifier flickers | Each unit keeps the side most of its last six frames gave it |
+| Archers sent to the left bridge while an enemy Giant walked down the right lane; troops sent alone to the bridge | In the look-ahead the opponent stood still, so a troop at the bridge always reached a tower | The opponent now answers our troops in their lane about a second later, with a generic hand |
+
+On the recorded frames, v4.2 stops the refused taps, defends the hidden Mini P.E.K.K.A at the
+tower, and meets the enemy Giant in front of the right tower. A longer look-ahead when
+enemies are on our side (10 s instead of 6 s) was tried and dropped: 6-14 against 6 s.
+
 ## Baseline: the scripted bots are rock-paper-scissors
 
 Round robin of the five scripted bots that ship with RoyaleGym (40 games per pairing):
@@ -77,9 +96,9 @@ Round robin of the five scripted bots that ship with RoyaleGym (40 games per pai
 
 ## Known weaknesses (next work)
 
-- Six-second lookahead with a passive opponent in the rollouts: it undervalues buildings
-  and slow tanks, and overvalues pushes that would be defended. (A longer lookahead alone
-  did not help: 7-13 against the 6-second version.)
+- Six-second lookahead: it undervalues buildings and slow tanks. (A longer lookahead
+  did not help: 7-13 against the 6-second version.) The rollout opponent only answers once,
+  with a generic hand, not the real opponent's cards.
 - The screen reader misses small units such as skeletons and can't see hidden buildings.
 - Card and tower levels are the simulator's, not the account's.
 - Next: learn from top players' replays (recorder in `crownzero/real/capture.py`), and
@@ -101,11 +120,15 @@ python -m venv .venv && .venv/bin/pip install -e ".[sim]"
 
 ```
 crownzero/search_bot.py      lookahead search (candidates, rollouts, scoring)
+crownzero/opponent_model.py  how the opponent answers inside the rollouts
 crownzero/live_search.py     rebuild a seen board in the simulator and search it
 crownzero/features.py        what the bot sees (the same from the simulator and the screen)
 crownzero/model.py, train.py the imitation network (v1/v2)
 crownzero/arena.py           parallel matches with seat-balanced Wilson intervals
-crownzero/real/              the real game: Build-A-Bot bridge, card names, recorder
+crownzero/real/              the real game: Build-A-Bot bridge, card names, recorder,
+                             memory across frames (perception.py)
+scripts/analyze_battle.py    post-match report of a recorded battle
+scripts/replay_battle.py     the current bot on a recorded battle's frames
 tests/                       unit and end-to-end tests (no phone needed)
 results/                     raw per-game results (JSON lines)
 ```

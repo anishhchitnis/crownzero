@@ -28,6 +28,7 @@ from ..student_bot import decide
 from . import cardmap
 from .adapter import (TYPE_TO_CARD, Clock, TowerTracker, decode, legal_mask,
                       playable_slots, view_from_state)
+from .perception import ElixirBook, HiddenAttacker, SideTracker
 
 DISPLAY_W, DISPLAY_H = 720, 1280  # Build-A-Bot's coordinate space
 
@@ -162,6 +163,9 @@ def make_bot_class():
             self.plays = 0
             self.last_image = None
             self.towers = TowerTracker()
+            self.elixir_book = ElixirBook()
+            self.sides = SideTracker()
+            self.hidden = HiddenAttacker()
             self.recent_plays = []  # (time, tile x, tile y, unit names) of our last plays
             self.units_of = {cardmap.sim_name(a.CARD.name): {u.name for u in a.CARD.units}
                              for a in actions}
@@ -196,8 +200,10 @@ def make_bot_class():
         def step(self, state):
             new_state = super().step(state)
             in_game = new_state is not None and new_state.screen == Screens.IN_GAME
-            if not in_game and self.clock.start is not None:
-                self.towers.reset()  # the battle ended
+            if not in_game and self.clock.start is not None:  # the battle ended
+                self.towers.reset()
+                self.sides.reset()
+                self.hidden.reset()
             self.clock.update(in_game)
             if (self.recorder is not None and new_state is not None
                     and new_state.screen == Screens.UNKNOWN):
@@ -209,10 +215,20 @@ def make_bot_class():
                 time.sleep(0.5)
                 return
             self.clock.update(True)
+            import dataclasses
+
             state = self._own_recent_plays(state)
+            allies, enemies = self.sides.update(list(state.allies), list(state.enemies))
+            state = dataclasses.replace(state, allies=allies, enemies=enemies)
             view = view_from_state(state, self.clock)
             p = self.towers.update([view.towers[1], view.towers[2], view.towers[4], view.towers[5]])
             view.towers[1], view.towers[2], view.towers[4], view.towers[5] = p
+            view.elixir = self.elixir_book.effective(view.elixir, view.double, view.overtime,
+                                                     hand=list(view.hand_names))
+            for name, x, y in self.hidden.update(view):
+                view.units.append((0, -1, x, y, 0, 3.5))
+                view.unit_names.append(name)
+                logger.info(f"tower under attack with nothing seen near it: assuming a {name} at ({x}, {y})")
             self._check_deck(state, view)
             decision = dict(played=False)
             if self.live is not None:
@@ -248,6 +264,8 @@ def make_bot_class():
 
             self.play_action(Play)
             self.plays += 1
+            self.elixir_book.played(view.elixir, cardmap.SIM_COST.get(decision["card"], 0),
+                                    decision["slot"], decision["card"])
             self.recent_plays.append((time.monotonic(), *decision["tile"],
                                       self.units_of.get(decision["card"], set())))
             if self.live is not None:
@@ -309,6 +327,9 @@ def main():
                     help="search: rebuild the board in the simulator and search it each move "
                          "(stronger; needs the simulator installed). network: the trained "
                          "network alone (lighter).")
+    ap.add_argument("--opponent-model", choices=["defender", "none"], default="defender",
+                    help="in the look-ahead, does the opponent defend our pushes (defender) "
+                         "or stand still (none, the v4.1 behaviour)")
     ap.add_argument("--record", default=None, metavar="DIR",
                     help="save every frame, what was detected and what the bot did, to DIR")
     args = ap.parse_args()
@@ -332,7 +353,8 @@ def main():
     recorder = None
     if args.record:
         from .recorder import Recorder
-        recorder = Recorder(args.record, dict(deck=deck, model=args.model,
+        recorder = Recorder(args.record, dict(deck=deck, model=args.model, brain=args.brain,
+                                              opponent_model=args.opponent_model,
                                               play_threshold=args.play_threshold))
         logger.info(f"recording to {recorder.dir}")
     live = None
@@ -343,11 +365,15 @@ def main():
             raise SystemExit("--brain search needs the simulator: "
                              "uv pip install -e \"../crownzero[search]\"  "
                              f"(or run with --brain network). ({e})")
-        live = LiveSearch([cardmap.sim_name(c) for c in deck])
-        logger.info("brain: live search in the simulator")
+        kw = {"reply": "defender"} if args.opponent_model == "defender" else {}
+        live = LiveSearch([cardmap.sim_name(c) for c in deck], kw)
+        logger.info(f"brain: live search in the simulator (opponent model: "
+                    f"{args.opponent_model})")
     bot = make_bot_class()(make_actions(deck), config, net, args.play_threshold,
                            recorder=recorder, live=live)
-    logger.info(f"CrownZero ready with deck {deck}. Start a Training Camp battle; "
+    from .. import __version__
+
+    logger.info(f"CrownZero v{__version__} ready with deck {deck}. Start a Training Camp battle; "
                 f"Ctrl+C to stop.")
     bot.run()
 

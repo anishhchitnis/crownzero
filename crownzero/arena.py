@@ -39,6 +39,9 @@ def make_bot(spec):
         if "reply_model" in kw:  # two-ply search: the opponent answers with this network
             from .student_bot import StudentBot
             kw["opponent"] = StudentBot(kw.pop("reply_model"))
+        if "reply" in kw:
+            from .opponent_model import make_opponent
+            kw["opponent"] = make_opponent(kw.pop("reply"))
         return SearchBot(**kw)
     if name == "live-search":  # search on a board rebuilt from screen-reader-level info
         from .live_search import LiveSearchBot

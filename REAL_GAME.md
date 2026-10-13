@@ -82,6 +82,9 @@ for enemy troops. If most of your hand doesn't match, the bot prints a warning.
 - `--brain network`: the trained network alone, no simulator. Weaker, lighter, and it
   only knows 18 cards.
 
+With the search brain, `--opponent-model none` makes the look-ahead assume the opponent
+never answers (the v4.1 behaviour); the default, `defender`, has it defend our pushes.
+
 ## 5. Play
 
 With the emulator running, from **inside the ClashRoyaleBuildABot folder** (so Python

@@ -42,6 +42,9 @@ class Recorder:
     def __init__(self, root, meta: dict):
         self.dir = Path(root) / time.strftime("%Y%m%d-%H%M%S")
         self.dir.mkdir(parents=True, exist_ok=True)
+        from crownzero import __version__
+
+        meta = dict(meta, version=__version__)  # which bot played, for the analysis
         (self.dir / "meta.json").write_text(json.dumps(meta, indent=2))
         self.log = (self.dir / "steps.jsonl").open("a")
         self.n = 0
