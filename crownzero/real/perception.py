@@ -12,6 +12,11 @@ SideTracker    Units of cards both decks share (Giant, Knight, Mini P.E.K.K.A...
                Detections are matched to the same unit in the previous frames and take the
                side most of its recent frames gave it.
 
+               Buildings can only be placed on their owner's half, so a building's side is
+               its half (our own Goblin Hut was read as an enemy one, 2026-10-13); and a
+               unit first seen beside a building that spawns it (a Hut's Spear Goblins)
+               starts out on that building's side.
+
 HiddenAttacker A troop standing at the foot of our tower is drawn behind it and the detector
                missed it: an enemy Mini P.E.K.K.A took our left tower from 100% to 21% in
                four seconds with no enemy detected near it. When a tower is losing health
@@ -65,12 +70,29 @@ class ElixirBook:
         return max(0.0, min(10.0, e))
 
 
+ANYWHERE_BUILDINGS = {"goblin_drill"}  # dug in anywhere on the arena
+SPAWNS = {"goblin_hut": {"spear_goblin"}, "tombstone": {"skeleton"},
+          "barbarian_hut": {"barbarian"}, "furnace": {"fire_spirit"},
+          "goblin_cage": {"brawler", "goblin_brawler"}, "goblin_drill": {"goblin"}}
+
+
+def building_side(d) -> int:
+    """+1 / -1 for a building on our / the enemy's half, 0 for anything else."""
+    unit = d.unit
+    if getattr(unit, "category", None) != "building" or unit.name in ANYWHERE_BUILDINGS:
+        return 0
+    y = d.position.tile_y
+    return 1 if y <= 14 else -1 if y >= 17 else 0
+
+
 class SideTracker:
     """Majority vote on each unit's side over its last few frames."""
 
     MATCH_TILES = 2.5
     KEEP_FRAMES = 3
     VOTES = 6
+    SPAWN_NEAR = 2.5  # tiles from the building that spawned it
+    SPAWN_PRIOR = 3   # worth this many frames of votes
 
     def __init__(self):
         self.tracks: list[dict] = []
@@ -104,15 +126,24 @@ class SideTracker:
             det_track[i] = free[j]
             used.add(j)
         alive = [t for j, t in enumerate(free) if j in used]
+        spawners = [(d.position.tile_x, d.position.tile_y, building_side(d), d.unit.name)
+                    for d, _ in dets if building_side(d)]
         for i, (d, vote) in enumerate(dets):
             t = det_track.get(i)
             if t is None:
-                t = dict(name=d.unit.name, votes=deque(maxlen=self.VOTES))
+                prior = 0
+                px, py = d.position.tile_x, d.position.tile_y
+                for bx, by, bside, bname in spawners:
+                    if (d.unit.name in SPAWNS.get(bname, ())
+                            and (bx - px) ** 2 + (by - py) ** 2 <= self.SPAWN_NEAR ** 2):
+                        prior = self.SPAWN_PRIOR * bside
+                t = dict(name=d.unit.name, votes=deque(maxlen=self.VOTES), prior=prior)
                 alive.append(t)
             t["x"], t["y"], t["seen"] = d.position.tile_x, d.position.tile_y, self.frame
             t["votes"].append(vote)
-            side = sum(t["votes"])
-            (out_allies if (side > 0 or (side == 0 and vote > 0)) else out_enemies).append(d)
+            side = building_side(d) * 100 or sum(t["votes"]) + t.get("prior", 0)
+            tie = t.get("prior", 0) or vote  # a tie goes to the spawn prior, else to this frame
+            (out_allies if (side > 0 or (side == 0 and tie > 0)) else out_enemies).append(d)
         self.tracks = alive + [t for t in self.tracks
                                if t not in alive and self.frame - t["seen"] <= self.KEEP_FRAMES]
         return out_allies, out_enemies

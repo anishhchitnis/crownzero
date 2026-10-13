@@ -21,6 +21,29 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
+def explain(live, bot, recorder):
+    """What the bot saw at this frame and how it scored its options."""
+    from crownzero.board import CELLS, NX
+
+    row = json.loads((recorder.dir / "steps.jsonl").read_text().splitlines()[-1])
+    v = row["view"]
+    print(f"    elixir {v['elixir']:.1f}  hand {[c for c in row['cards'][1:]]}  ready {row['ready']}")
+    print(f"    towers {[round(t, 2) for t in v['towers']]}")
+    print(f"    allies  {[(a['name'], tuple(a['tile'])) for a in row['allies']]}")
+    print(f"    enemies {[(e['name'], tuple(e['tile'])) for e in row['enemies']]}")
+    scores = getattr(live.search, "last_scores", [])
+    hand = live.mutator.setup.decks[0][:4] if live.mutator.setup else []
+    names = {c.card_id: c.name for c in live.catalogue}
+    for value, a in scores[:8]:
+        if a == 0:
+            what = "wait"
+        else:
+            slot, cell = divmod(a - 1, CELLS)
+            y, x = divmod(cell, NX)
+            what = f"{names.get(hand[slot], slot)} at ({x}, {y})"
+        print(f"      {value:7.2f}  {what}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("recording")
@@ -28,6 +51,8 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--crbab", default=None, help="Build-A-Bot checkout, if not installed")
     ap.add_argument("--opponent-model", choices=["defender", "none"], default="defender")
+    ap.add_argument("--explain", default="", help="frames to explain, e.g. 00119,00122: "
+                                                  "what was seen and the best-scored plays")
     args = ap.parse_args()
     if args.crbab:
         sys.path.insert(0, args.crbab)
@@ -87,6 +112,8 @@ def main():
     # replay's own (never executed) decisions.
     book_played = bot.elixir_book.played
     bot.elixir_book.played = lambda *a, **k: None
+    check_played = bot.play_check.played  # likewise for checking that plays happened
+    bot.play_check.played = lambda *a, **k: None
     t0 = rows[0]["t"]
     changed = 0
     for r, f in frames:
@@ -102,11 +129,14 @@ def main():
             # with the slot and card, a tap that failed in the real game is forgotten
             book_played(r["view"]["elixir"], cardmap.SIM_COST.get(old["card"], 0),
                         old.get("slot"), old.get("card"))
+            check_played(old["slot"], old["card"], "tap")
         o = f"{old.get('card')} {old.get('tile')}" if old.get("played") else "wait"
         n = f"{new.get('card')} {new.get('tile')}" if new.get("played") else "wait"
         if o != n:
             changed += 1
         print(f"{r['t']:7.1f}s {r['frame']}  was: {o:28s} now: {n}")
+        if r["frame"] in args.explain.split(","):
+            explain(live, bot, recorder)
         assert len(fake.clicks) - n_before in (0, 2)
     print(f"\n{changed}/{len(frames)} decisions changed. Annotated frames in {recorder.dir}")
 

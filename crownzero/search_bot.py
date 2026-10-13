@@ -50,12 +50,13 @@ class SearchBot:
     def __init__(self, horizon_ticks: int = 120, margin: float = 0.05,
                  max_spell_targets: int = 4, weights: type[Weights] = Weights,
                  opponent=None, reply_ticks: int = 20,
-                 defend_horizon_ticks: int | None = None) -> None:
+                 defend_horizon_ticks: int | None = None, spawn_scaling: bool = True) -> None:
         """``opponent``: an object with ``reply(state, team, mask) -> action``. When given,
         every rollout lets the opponent answer ``reply_ticks`` after our move (a two-ply
         search) instead of assuming it stands still."""
         self.opponent = opponent
         self.reply_ticks = reply_ticks
+        self.spawn_scaling = spawn_scaling  # value summoned units by their own size
         self.base_horizon = horizon_ticks
         # Look further ahead when enemy troops are on our side: a Giant at the bridge needs
         # ~10 s to reach a tower, and a 6 s look-ahead sees no danger in it (recorded
@@ -97,16 +98,20 @@ class SearchBot:
         setup_cards = getattr(engine, "_setup_cards", None)
         blob = engine.save_state()
         # Waiting first: the engine already sits at the saved point, so no load is needed.
-        best_value = self._rollout(env, engine, None, team) + self.margin
+        wait_value = self._rollout(env, engine, None, team)
+        best_value = wait_value + self.margin
         best_action = NOOP
+        scores = [(wait_value, NOOP)]
         for action in cands:
             cmd = env.action_parser.parse(action, state, team)
             if cmd is None:
                 continue
             engine.load_state(blob)
             value = self._rollout(env, engine, cmd, team)
+            scores.append((value, action))
             if value > best_value:
                 best_value, best_action = value, action
+        self.last_scores = sorted(scores, reverse=True)  # for explaining a decision
         engine.load_state(blob)
         if setup_cards is not None:
             engine._setup_cards = setup_cards
@@ -142,8 +147,7 @@ class SearchBot:
                 if ent.hp > 0:
                     enemy_towers.append((x, y))
                 continue
-            card = self.cards.get(ent.card_id)
-            value = card.unit_value if card else ent.max_hp / 600
+            value = self._unit_value(ent)
             enemies.append((x, y, value * ent.hp / max(ent.max_hp, 1)))
 
         # Spell targets: where enemy value is densest, plus the towers.
@@ -189,6 +193,12 @@ class SearchBot:
         return sorted(out)
 
     # ---------------------------------------------------------------- scoring
+    def _unit_value(self, ent) -> float:
+        card = self.cards.get(ent.card_id)
+        if card is None:
+            return ent.max_hp / 600
+        return card.entity_value(ent.max_hp) if self.spawn_scaling else card.unit_value
+
     def _value(self, s, team: int) -> float:
         w = self.w
         enemy = 1 - team
@@ -215,9 +225,7 @@ class SearchBot:
             elif ent.kind in (EntityKind.TROOP, EntityKind.BUILDING):
                 units.append((ent, x, y))
         for ent, x, y in units:
-            card = self.cards.get(ent.card_id)
-            base = card.unit_value if card else ent.max_hp / 600
-            val = base * ent.hp / max(ent.max_hp, 1)
+            val = self._unit_value(ent) * ent.hp / max(ent.max_hp, 1)
             target = towers[enemy] if ent.team == team else towers[team]
             if target:
                 d = min(((x - tx) ** 2 + (y - ty) ** 2) ** 0.5 for tx, ty in target)

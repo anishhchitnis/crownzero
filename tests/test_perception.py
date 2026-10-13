@@ -66,3 +66,30 @@ def test_a_play_that_never_happened_is_forgotten():
     assert book.effective(8, hand=[None, "GoblinCage", None, None]) < 5  # too soon to tell
     c.t = 1.5  # still in its slot 1.5 s later: the tap missed
     assert book.effective(8.5, hand=["Knight", "GoblinCage", "Giant", "Fireball"]) == 8.5
+
+
+def bdet(name, x, y):
+    return NS(unit=NS(name=name, category="building"), position=NS(tile_x=x, tile_y=y))
+
+
+def test_a_building_is_on_its_owners_half():
+    tr = SideTracker()
+    hut = bdet("goblin_hut", 9, 8)
+    for _ in range(3):
+        tr.update([hut], [])
+    allies, enemies = tr.update([], [bdet("goblin_hut", 9, 8)])  # classifier says enemy
+    assert [a.unit.name for a in allies] == ["goblin_hut"] and enemies == []
+    allies, enemies = tr.update([bdet("goblin_hut", 9, 23)], [])  # theirs, whatever it says
+    assert [e.unit.name for e in enemies] == ["goblin_hut"]
+
+
+def test_a_spear_goblin_born_at_our_hut_is_ours():
+    tr = SideTracker()
+    hut = bdet("goblin_hut", 9, 8)
+    tr.update([hut], [])
+    for _ in range(3):  # read as an enemy while it appears; the hut's prior holds
+        allies, enemies = tr.update([hut], [det("spear_goblin", 9, 10)])
+        assert "spear_goblin" in [a.unit.name for a in allies]
+    # an enemy spear goblin coming over the bridge is still an enemy
+    allies, enemies = tr.update([hut], [det("spear_goblin", 3, 14)])
+    assert [e.position.tile_x for e in enemies] == [3]

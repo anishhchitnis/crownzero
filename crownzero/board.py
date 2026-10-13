@@ -30,16 +30,31 @@ class Card:
     elixir: int
     count: int
     kind: str  # TROOP, BUILDING or SPELL
+    hitpoints: int = 0  # of one of the card's own units (0 for spells)
 
     @property
     def unit_value(self) -> float:
         """Elixir that ONE summoned unit of this card is worth at full health."""
         return self.elixir / max(self.count, 1)
 
+    def entity_value(self, max_hp: float) -> float:
+        """Elixir one unit on the board is worth at full health. Units a card summons later
+        (a Goblin Hut's Spear Goblins, a Witch's skeletons) carry the card's id too, but
+        are small: they are worth their share of the card's own unit, by hitpoints.
+        Before this, each 133-hp Spear Goblin from a Hut counted as a whole 4-elixir Hut
+        and the bot played the Hut over everything else (recorded 2026-10-13)."""
+        if self.hitpoints > 0 and 0 < max_hp < SPAWN_RATIO * self.hitpoints:
+            return self.unit_value * max_hp / self.hitpoints
+        return self.unit_value
+
+
+SPAWN_RATIO = 0.6  # a unit with less than this share of the card's hitpoints was summoned
+
 
 def card_table(engine) -> dict[int, Card]:
     return {
-        c.card_id: Card(c.card_id, c.name, c.elixir, c.count, c.card_kind or "TROOP")
+        c.card_id: Card(c.card_id, c.name, c.elixir, c.count, c.card_kind or "TROOP",
+                        int(getattr(c, "hitpoints", 0) or 0))
         for c in engine.cards()
     }
 

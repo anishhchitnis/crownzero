@@ -11,6 +11,7 @@ and flags the moments worth looking at:
                  enemy units next to it
   * LEAK         elixir at 10 with a card ready
   * ODD PLAY     a play in a corner or on the back row with no enemy within 5 tiles
+  * NO PLAY      a play the bot made that never happened (the card stayed in hand)
   * PERCEPTION   detections outside the battlefield, units flipping between ally and enemy,
                  blank hand slots
 
@@ -143,6 +144,21 @@ def analyze(folder: Path):
             if n >= 10 and played.get(cardmap.CARD_TO_SIM.get(c, c), 0) <= 1}
     if idle:
         print(f"cards ready but (almost) never played, decisions held: {idle}")
+    # did each play happen? the card must leave its slot within ~2 s
+    failed = []
+    for i, r in enumerate(rows):
+        d = r["decision"]
+        if not d.get("played"):
+            continue
+        card = r["cards"][d["slot"] + 1]
+        later = [x for x in rows[i + 1:] if 1.0 <= x["t"] - r["t"] <= 2.5]
+        if later and all(x["cards"][d["slot"] + 1] == card for x in later):
+            failed.append(i)
+            flag("NO PLAY", i, f"{d['card']} at {tuple(d['tile'])} never left the hand")
+    print(f"plays that happened: {len(plays) - len(failed)}/{len(plays)}")
+    cap = [r["decision"]["capture_ms"] for r in rows if r["decision"].get("capture_ms")]
+    if cap:
+        print(f"screenshot time: median {statistics.median(cap):.0f} ms, max {max(cap)} ms")
     spent = [r["elixir"] for r in plays if r["elixir"] is not None]
     if spent:
         print(f"elixir when playing: median {statistics.median(spent):.0f}; "

@@ -82,6 +82,10 @@ for enemy troops. If most of your hand doesn't match, the bot prints a warning.
 - `--brain network`: the trained network alone, no simulator. Weaker, lighter, and it
   only knows 18 cards.
 
+Plays are a drag from the card to the tile, checked afterwards; if drags never land on your
+emulator the bot switches to taps by itself (`--input tap` forces taps). Screenshots are
+taken fresh each time (`--capture stream` uses Build-A-Bot's video stream instead).
+
 With the search brain, `--opponent-model none` makes the look-ahead assume the opponent
 never answers (the v4.1 behaviour); the default, `defender`, has it defend our pushes.
 

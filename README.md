@@ -34,6 +34,7 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v3 | Live search: rebuild the board seen on screen in the simulator, search it every move | 18-2 against v1; 20-0 against defend and patient |
 | v4 | Any deck, any card; current card art; tower bars smoothed; deck mismatch warning | Fixes the misread hand found in real-game recordings |
 | v4.1 | Ignores arena decorations read as troops; our own deploying troops stay ours | Fixes the phantom defence found in the next recording |
+| v4.3 | Fresh screenshots, one-drag plays checked against the hand, detector on 2 cores; summoned units valued by their size; buildings keep their side | Fixes the 41% of plays that never happened in the fourth recording, and the Goblin Hut overvalued; 15-15 against v4.2 in a mirror match with that deck |
 | v4.2 | Memory across frames (elixir after a play, ally/enemy vote, attackers hidden behind a tower); the opponent defends inside the look-ahead | Fixes the four mistakes found in the third recording (below); in the simulator 40-40 against v4.1 and 6-14 against full-information search, same as v4.1 |
 
 ### What the real-game recordings showed (v3 → v4)
@@ -82,6 +83,19 @@ On the recorded frames, v4.2 stops the refused taps, defends the hidden Mini P.E
 tower, and meets the enemy Giant in front of the right tower. A longer look-ahead when
 enemies are on our side (10 s instead of 6 s) was tried and dropped: 6-14 against 6 s.
 
+### Fourth recording (v4.2 → v4.3): the bot won, but 12 of 29 plays never happened
+
+`analyze_battle.py` now checks every play against the hand afterwards. In the fourth
+battle (a win, 2 crowns) 12 of 29 plays never happened, and 13 of 29 in the third. The game
+clock drawn on the screenshots showed why: right before most failed plays, the frame the bot
+was deciding on was 4-6 s old ("2:40 left", then 2.1 s later "2:33").
+
+| Mistake | Cause | Fix |
+|---|---|---|
+| Plays that never happened; a Goblin Hut tap that brought out Spear Goblins at the wrong tower; our left tower lost 85% to a Mini P.E.K.K.A while two defending plays failed | Build-A-Bot reads the screen as a video stream in a background thread that falls seconds behind when the detector and search are busy; the detector runs on every core and starves the emulator; a play was two separate tap commands, and a lost second tap left the card raised | A screenshot is taken when the bot looks (`screencap`); the detector gets 2 threads; a play is one drag from card to tile; every play is checked against the hand, and drags fall back to taps if they never land |
+| Goblin Hut played first again and again | Units a card summons carry its id: each 133-hp Spear Goblin from a Hut was scored as a whole 4-elixir Hut (a Witch's skeletons likewise) | A summoned unit is worth its share of the card's own unit, by hitpoints. In the recorded Mini P.E.K.K.A defence the Hut's score fell from 32.9 to 24.4, next to the Mini P.E.K.K.A's 23.3 |
+| Our Goblin Hut and its Spear Goblins read as enemies (30 flips) | Both decks were nearly the same cards | A building is on its owner's half; a unit first seen beside a building that spawns it starts on that building's side (20 flips on the same frames) |
+
 ## Baseline: the scripted bots are rock-paper-scissors
 
 Round robin of the five scripted bots that ship with RoyaleGym (40 games per pairing):
@@ -126,7 +140,8 @@ crownzero/features.py        what the bot sees (the same from the simulator and 
 crownzero/model.py, train.py the imitation network (v1/v2)
 crownzero/arena.py           parallel matches with seat-balanced Wilson intervals
 crownzero/real/              the real game: Build-A-Bot bridge, card names, recorder,
-                             memory across frames (perception.py)
+                             memory across frames (perception.py), screenshots and
+                             plays (device.py)
 scripts/analyze_battle.py    post-match report of a recorded battle
 scripts/replay_battle.py     the current bot on a recorded battle's frames
 tests/                       unit and end-to-end tests (no phone needed)

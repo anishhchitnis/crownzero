@@ -47,7 +47,7 @@ class DefenderReply:
                 continue
             x, y = own_tile(self.arena, team, ent.x, ent.y)
             if y <= THREAT_Y:
-                threats.append((card.unit_value * ent.hp / max(ent.max_hp, 1), x, y))
+                threats.append((card.entity_value(ent.max_hp) * ent.hp / max(ent.max_hp, 1), x, y))
         if not threats:
             return NOOP
         # the lane with the most attacking value

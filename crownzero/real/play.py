@@ -28,6 +28,7 @@ from ..student_bot import decide
 from . import cardmap
 from .adapter import (TYPE_TO_CARD, Clock, TowerTracker, decode, legal_mask,
                       playable_slots, view_from_state)
+from .device import PlayCheck, deploy, limit_detector_threads, use_fresh_screenshots
 from .perception import ElixirBook, HiddenAttacker, SideTracker
 
 DISPLAY_W, DISPLAY_H = 720, 1280  # Build-A-Bot's coordinate space
@@ -140,11 +141,19 @@ def _use_current_card_art():
     cd.CardDetector._crownzero_art = True
 
 
-def make_bot_class():
+def make_bot_class(capture: str = "screencap", detector_threads: int = 2):
+    """``capture``: "screencap" (a fresh screenshot whenever the bot looks) or "stream"
+    (Build-A-Bot's video stream, which fell seconds behind in recorded battles)."""
     import clashroyalebuildabot.bot.bot as botmod
+    import clashroyalebuildabot.detectors.onnx_detector as onnx_detector
+    import clashroyalebuildabot.emulator.emulator as em
 
     _connect_network_devices()
     _use_current_card_art()
+    if capture == "screencap":
+        use_fresh_screenshots(em)
+    if detector_threads:
+        limit_detector_threads(onnx_detector, detector_threads)
     from clashroyalebuildabot.bot.bot import Bot
     from clashroyalebuildabot.namespaces import Screens
 
@@ -152,7 +161,7 @@ def make_bot_class():
 
     class NetworkBot(Bot):
         def __init__(self, actions, config, net, play_threshold=0.5, after_play_s=0.6,
-                     recorder=None, live=None):
+                     recorder=None, live=None, input_mode="auto"):
             super().__init__(actions=actions, config=config)
             self.net = net
             self.live = live  # a LiveSearch: think by rebuilding the board in the simulator
@@ -169,6 +178,10 @@ def make_bot_class():
             self.recent_plays = []  # (time, tile x, tile y, unit names) of our last plays
             self.units_of = {cardmap.sim_name(a.CARD.name): {u.name for u in a.CARD.units}
                              for a in actions}
+            # "auto": drag the card onto the tile; if drags never land, switch to taps
+            self.auto_input = input_mode == "auto"
+            self.input_mode = "tap" if input_mode == "tap" else "swipe"
+            self.play_check = PlayCheck()
             self.blank_log = []  # recent share of the hand read as blank, mid-battle
             self.warned_deck = False
             w = getattr(self.emulator, "width", DISPLAY_W)
@@ -194,13 +207,20 @@ def make_bot_class():
             sy = getattr(self.emulator, "height", DISPLAY_H) / DISPLAY_H
             cx, cy = self._get_card_centre(action.index)
             tx, ty = self._get_tile_centre(action.tile_x, action.tile_y)
-            self.emulator.click(round(cx * sx), round(cy * sy))
-            self.emulator.click(round(tx * sx), round(ty * sy))
+            card = (round(cx * sx), round(cy * sy))
+            tile = (round(tx * sx), round(ty * sy))
+            if hasattr(self.emulator, "_run_command"):  # one adb command per play
+                deploy(self.emulator, card, tile, self.input_mode)
+            else:  # an emulator stand-in (tests, replays) that only knows taps
+                self.emulator.click(*card)
+                self.emulator.click(*tile)
 
         def step(self, state):
             new_state = super().step(state)
             in_game = new_state is not None and new_state.screen == Screens.IN_GAME
             if not in_game and self.clock.start is not None:  # the battle ended
+                logger.info(f"battle over: {self.play_check.summary()}")
+                self.play_check = PlayCheck()
                 self.towers.reset()
                 self.sides.reset()
                 self.hidden.reset()
@@ -231,6 +251,12 @@ def make_bot_class():
                 logger.info(f"tower under attack with nothing seen near it: assuming a {name} at ({x}, {y})")
             self._check_deck(state, view)
             decision = dict(played=False)
+            checked = self._check_plays(view)
+            if checked:
+                decision["checked"] = checked
+            if getattr(self.emulator, "capture_ms", None) is not None:
+                decision["capture_ms"] = self.emulator.capture_ms
+                self._watch_capture(self.emulator.capture_ms)
             if self.live is not None:
                 slots = playable_slots(view, list(state.ready))
                 if slots:
@@ -264,6 +290,7 @@ def make_bot_class():
 
             self.play_action(Play)
             self.plays += 1
+            self.play_check.played(decision["slot"], decision["card"], self.input_mode)
             self.elixir_book.played(view.elixir, cardmap.SIM_COST.get(decision["card"], 0),
                                     decision["slot"], decision["card"])
             self.recent_plays.append((time.monotonic(), *decision["tile"],
@@ -276,6 +303,29 @@ def make_bot_class():
                             f"{tuple(decision['tile'])} | P(wait) {decision['p_wait']:.2f} | "
                             f"win estimate {decision['value']:+.2f}")
             time.sleep(self.after_play_s)
+
+        def _watch_capture(self, ms):
+            self.capture_log = (getattr(self, "capture_log", []) + [ms])[-20:]
+            if (len(self.capture_log) == 20 and not getattr(self, "warned_capture", False)
+                    and sorted(self.capture_log)[10] > 800):
+                self.warned_capture = True
+                logger.warning(f"screenshots take ~{sorted(self.capture_log)[10]} ms each; "
+                               f"if the bot feels slow, try --capture stream")
+
+        def _check_plays(self, view):
+            """Settle earlier plays against the hand now; switch drags to taps if drags
+            never land on this device."""
+            out = []
+            for card, landed in self.play_check.update(list(view.hand_names)):
+                out.append([card, landed])
+                if not landed:
+                    logger.warning(f"the {card} play did not happen (still in hand)")
+            pc = self.play_check
+            if (self.auto_input and self.input_mode == "swipe" and pc.landed["swipe"] == 0
+                    and pc.failed["swipe"] >= 3):
+                self.input_mode = "tap"
+                logger.warning("card drags are not landing on this device: switching to taps")
+            return out
 
         def _own_recent_plays(self, state, window_s=4.0, dx=2, dy=3):
             """A troop we just placed is still in its deploy animation, and the reader's
@@ -330,6 +380,12 @@ def main():
     ap.add_argument("--opponent-model", choices=["defender", "none"], default="defender",
                     help="in the look-ahead, does the opponent defend our pushes (defender) "
                          "or stand still (none, the v4.1 behaviour)")
+    ap.add_argument("--input", choices=["auto", "swipe", "tap"], default="auto",
+                    help="how to play a card: drag it onto the tile (swipe), tap card then "
+                         "tile (tap), or drag and fall back to taps if drags don't land (auto)")
+    ap.add_argument("--capture", choices=["screencap", "stream"], default="screencap",
+                    help="screencap: a fresh screenshot each time (default). stream: "
+                         "Build-A-Bot's video stream (can fall seconds behind)")
     ap.add_argument("--record", default=None, metavar="DIR",
                     help="save every frame, what was detected and what the bot did, to DIR")
     args = ap.parse_args()
@@ -355,6 +411,7 @@ def main():
         from .recorder import Recorder
         recorder = Recorder(args.record, dict(deck=deck, model=args.model, brain=args.brain,
                                               opponent_model=args.opponent_model,
+                                              input=args.input, capture=args.capture,
                                               play_threshold=args.play_threshold))
         logger.info(f"recording to {recorder.dir}")
     live = None
@@ -369,8 +426,9 @@ def main():
         live = LiveSearch([cardmap.sim_name(c) for c in deck], kw)
         logger.info(f"brain: live search in the simulator (opponent model: "
                     f"{args.opponent_model})")
-    bot = make_bot_class()(make_actions(deck), config, net, args.play_threshold,
-                           recorder=recorder, live=live)
+    bot = make_bot_class(capture=args.capture)(make_actions(deck), config, net,
+                                              args.play_threshold, recorder=recorder,
+                                              live=live, input_mode=args.input)
     from .. import __version__
 
     logger.info(f"CrownZero v{__version__} ready with deck {deck}. Start a Training Camp battle; "
