@@ -1,28 +1,59 @@
 # CrownZero
 
-An AI that learns to play Clash Royale, aiming to be the strongest bot that exists.
-It trains inside [RoyaleSim](https://github.com/RoyaleGym/RoyaleSim), an open-source Rust
-re-implementation of the battle engine that is calibrated against recordings of real
-battles, through the [RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) environment API.
-Everything runs on a laptop CPU.
+An AI that plays Clash Royale, built to become the strongest bot there is. It thinks inside
+[RoyaleSim](https://github.com/RoyaleGym/RoyaleSim), an open-source re-implementation of the
+battle engine calibrated against recordings of real battles (through the
+[RoyaleGym](https://github.com/RoyaleGym/RoyaleGym) API), and plays the real game through
+[Build-A-Bot](https://github.com/Pbatch/ClashRoyaleBuildABot)'s screen reader. Everything
+runs on a laptop CPU.
 
-## Status
+## How it plays
 
-| Stage | What | Status |
+Every move, in the real game:
+
+1. **See.** Build-A-Bot reads the screenshot: every unit's type, side and tile, the four
+   cards in hand and the next one, elixir, and the princess towers' health bars.
+2. **Rebuild.** CrownZero rebuilds that exact board inside the simulator: the units on their
+   tiles, the towers at their health, our hand dealt in the right order, the clock.
+3. **Search.** For "wait" and for each candidate play (each card in hand at sensible spots:
+   in front of each tower, the bridges, behind the king, on top of enemy units for spells),
+   it simulates six seconds ahead and scores the result in elixir: tower health, crowns,
+   banked elixir and the value of every unit on the board.
+4. **Play** the best one, by tapping the card and the tile.
+
+It thinks in about 0.1-0.4 s per move. It never sees anything a human player can't: no
+unit health beyond what's drawn, no opponent hand or elixir.
+
+## Versions
+
+| Version | What changed | Result |
 |---|---|---|
-| 1 | Simulator set up, scripted-bot baseline | done |
-| 2 | Search bot (lookahead "teacher") | **done: 100-0 against every scripted bot** |
-| 3 | Student neural network that imitates the teacher using only fair, human-visible information | next |
-| 4 | Self-play reinforcement learning against a league of past versions | |
-| 5 | Deck mastery across all 18 calibrated cards | |
-| 6 | Stretch: real-game demo in Training Camp | |
+| Search bot | Lookahead search with full information, simulator only | 100-0 against all 5 scripted bots |
+| v1 | Neural network trained to imitate the search bot (behaviour cloning) | 92-8 against the scripted bots; 0-20 against the search bot |
+| v2 | v1 retrained on its own mistakes (DAgger correction round) | No better than v1 (30-30 head to head), not shipped |
+| v3 | Live search: rebuild the board seen on screen in the simulator, search it every move | 18-2 against v1; 20-0 against defend and patient |
+| v4 | Any deck, any card; current card art; tower bars smoothed; deck mismatch warning | Fixes the misread hand found in real-game recordings |
 
-## Results so far
+### What the real-game recordings showed (v3 → v4)
 
-### Baseline: the scripted bots are rock-paper-scissors
+`--record` saves every frame with what the bot saw and did. Five Training Camp games
+showed the bot's problems were mostly perception, not strategy:
 
-Round robin of the five scripted bots that ship with RoyaleGym, 40 games per pairing, one
-mirror deck (Knight, Archer, Giant, Minions, Fireball, Cannon, Zap, Musketeer):
+- It was run with a deck different from the one in the game. The reader forces every card
+  into the deck it is told, so it misread a third of the hand and, because its ally/enemy
+  split trusts the deck, it took our own Giant, Knight and Archers for enemy troops.
+- Build-A-Bot's Goblin Hut picture is older art than the live game's, so even with the
+  right deck it read the Goblin Hut as another card.
+- A princess tower on 84 HP has a bar too short to read and came out as "destroyed".
+
+v4 takes any 8 cards by name, maps all 110 cards and 96 unit types to the simulator, uses
+in-game card art where Build-A-Bot's is outdated, smooths the tower bars and warns when
+the hand on screen doesn't match the deck. Replaying the recorded battle through v4, the
+hand and the ally/enemy split read correctly.
+
+## Baseline: the scripted bots are rock-paper-scissors
+
+Round robin of the five scripted bots that ship with RoyaleGym (40 games per pairing):
 
 | Bot | Overall score | Loses to |
 |---|---|---|
@@ -32,72 +63,42 @@ mirror deck (Knight, Archer, Giant, Minions, Fireball, Cannon, Zap, Musketeer):
 | push | 41% | first-affordable, defend |
 | patient | 39% | random, first-affordable, push |
 
-No scripted bot beats all the others. That made the first bar: beat all five, with 95%
-confidence, from both seats.
+## Known weaknesses (next work)
 
-### Search bot vs every scripted bot
-
-20 games per opponent (10 per seat, the same seeds each way round). Intervals are 95%
-Wilson intervals on the win rate.
-
-| Opponent | Record | Win rate (95% CI) | 3-crown wins |
-|---|---|---|---|
-| random | 20-0 | 100% [84%, 100%] | 19 |
-| first-affordable | 20-0 | 100% [84%, 100%] | 16 |
-| defend | 20-0 | 100% [84%, 100%] | 16 |
-| push | 20-0 | 100% [84%, 100%] | 20 |
-| patient | 20-0 | 100% [84%, 100%] | 19 |
-
-On a second deck it was never tuned for (Hog Rider, Valkyrie, Musketeer, Skeleton Army,
-Tesla, Log, Fireball, Baby Dragon) it went 10-0 against defend and 10-0 against patient.
-
-The scripted ladder is now used up as a measuring stick. From here on, progress is measured
-against the search bot itself and against past versions of the learned bot.
-
-## How the search bot works
-
-Every half second of game time it:
-
-1. Lists candidate plays: each card in hand at a few sensible spots (in front of each tower,
-   the bridges, behind the king, on top of enemy units for spells), snapped to the nearest
-   cell the rules allow. Typically 12 to 24 candidates (median 22).
-2. Saves the engine, then for "wait" and for each candidate: reloads the save, makes the
-   play, simulates 6 seconds ahead with the opponent idle, and scores the result.
-3. Restores the engine exactly (checked by state hash every decision) and plays the best
-   candidate, or waits if nothing beats waiting.
-
-The score is in elixir units: tower health (a princess tower is worth 12, the king 30),
-crowns, banked elixir, and the elixir value of every unit on the board, with a bonus for
-units standing near an enemy tower. Leaking elixir at 10 falls out naturally: waiting gains
-nothing while a play converts elixir into board value.
-
-What it can see: the board, its own hand and elixir, which is what a human sees. It never
-reads the opponent's hand or elixir. Its one unfair edge is using the simulator as a
-perfect "what if" machine. That is why it is the teacher, not the final bot.
-
-Every recorded battle re-runs identically from its commands alone
-(`royalegym.verify_trace`), so the search never touches the real game state.
+- Six-second lookahead with a passive opponent in the rollouts: it undervalues buildings
+  and slow tanks, and overvalues pushes that would be defended. (A longer lookahead alone
+  did not help: 7-13 against the 6-second version.)
+- The screen reader misses small units such as skeletons and can't see hidden buildings.
+- Card and tower levels are the simulator's, not the account's.
+- Next: learn from top players' replays (recorder in `crownzero/real/capture.py`), and
+  self-play training to get past the hand-written scoring.
 
 ## Run it
 
+Real game (macOS or Windows, Android emulator with ADB): see [REAL_GAME.md](REAL_GAME.md).
+
+Simulator experiments:
+
 ```bash
-python -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python scripts/eval_vs_ladder.py 20         # search bot vs every scripted bot
-.venv/bin/python scripts/record_replay.py defend 7    # writes replays/*.html, open in a browser
+python -m venv .venv && .venv/bin/pip install -e ".[sim]"
+.venv/bin/python scripts/eval_bot.py --a live-search --b defend patient --games 20
+.venv/bin/python scripts/record_replay.py defend 7    # writes replays/*.html
 ```
 
 ## Layout
 
 ```
-crownzero/board.py        geometry, action ids, card table
-crownzero/search_bot.py   the lookahead search bot
-crownzero/arena.py        parallel match runner with seat-balanced Wilson intervals
-scripts/                  evaluation and replay recording
-results/                  raw per-game results (JSON lines)
-replays/                  self-contained HTML replays
+crownzero/search_bot.py      lookahead search (candidates, rollouts, scoring)
+crownzero/live_search.py     rebuild a seen board in the simulator and search it
+crownzero/features.py        what the bot sees (the same from the simulator and the screen)
+crownzero/model.py, train.py the imitation network (v1/v2)
+crownzero/arena.py           parallel matches with seat-balanced Wilson intervals
+crownzero/real/              the real game: Build-A-Bot bridge, card names, recorder
+tests/                       unit and end-to-end tests (no phone needed)
+results/                     raw per-game results (JSON lines)
 ```
 
 ## Fair play
 
-Everything here runs in a simulator. Supercell's fair-play rules ban automating the real
-game, so any real-game demo (stage 6) is limited to Training Camp on a throwaway account.
+Supercell's terms ban automating the game. Use Training Camp or friendly battles on a
+throwaway account only.

@@ -47,6 +47,14 @@ class Recorder:
         self.n = 0
         self.t0 = time.monotonic()
 
+    def frame(self, image, tag: str, every: int = 3, limit: int = 40):
+        """Save a raw frame (e.g. a screen the reader did not recognise), sparingly."""
+        n = self.tags = getattr(self, "tags", {})
+        n[tag] = n.get(tag, 0) + 1
+        if image is None or n[tag] % every != 1 or n[tag] > every * limit:
+            return
+        image.convert("RGB").save(self.dir / f"{tag}_{n[tag]:04d}.jpg", quality=85)
+
     def step(self, image, state, view, decision: dict):
         self.n += 1
         stem = f"{self.n:05d}"

@@ -13,6 +13,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..board import CELLS, HAND, NX, NY, NOOP, action_index
+from . import cardmap
 from ..features import (BUILD, CARD_TYPES, COST, FLY, TARGETS_BUILDINGS, TYPE_INDEX, View,
                         unit_value, zone)
 
@@ -63,6 +64,39 @@ class Clock:
                 t >= self.REGULATION_S)
 
 
+class TowerTracker:
+    """Smooths the princess-tower health bars. The reader returns 0 both for a destroyed
+    tower and for a bar it cannot find (an 84-HP tower's bar is too short to see), and
+    taking a living tower for a destroyed one sends the search badly wrong (it then thinks
+    it may place troops on the enemy's side, or that it has no tower to defend). So a 0 is
+    read as "almost destroyed" (4%), never as gone, and a sudden drop to 0 from a healthy
+    bar is ignored for a few frames as a misread."""
+
+    ALMOST = 0.04
+    HOLD = 4  # frames a healthy bar may vanish before we believe it
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.last = [1.0] * 4
+        self.zeros = [0] * 4
+
+    def update(self, readings):
+        out = []
+        for i, r in enumerate(readings):
+            if r > 0:
+                self.last[i], self.zeros[i] = r, 0
+                out.append(r)
+                continue
+            self.zeros[i] += 1
+            if self.last[i] >= 0.25 and self.zeros[i] <= self.HOLD:
+                out.append(self.last[i])
+            else:
+                out.append(min(self.last[i], self.ALMOST))
+        return out
+
+
 def unit_row(detection, own: bool, unknown_values: dict | None = None):
     unit = detection.unit
     pos = detection.position
@@ -79,7 +113,7 @@ def unit_row(detection, own: bool, unknown_values: dict | None = None):
     if t_name:
         value = unit_value(t_name)
     else:
-        value = (unknown_values or {}).get(name, DEFAULT_UNKNOWN_VALUE)
+        value = (unknown_values or {}).get(name, cardmap.unit_value(name, DEFAULT_UNKNOWN_VALUE))
     x = int(np.clip(pos.tile_x, 0, NX - 1))
     y = int(np.clip(pos.tile_y, 0, NY - 1))
     return (int(own), t, x, y, flags, float(value))
@@ -88,13 +122,15 @@ def unit_row(detection, own: bool, unknown_values: dict | None = None):
 def view_from_state(state, clock: Clock, unknown_values: dict | None = None) -> View:
     """A View from a Build-A-Bot State."""
     v = View()
-    for d in state.allies:
-        v.units.append(unit_row(d, True, unknown_values))
-    for d in state.enemies:
-        v.units.append(unit_row(d, False, unknown_values))
+    for own, dets in ((True, state.allies), (False, state.enemies)):
+        for d in dets:
+            v.units.append(unit_row(d, own, unknown_values))
+            v.unit_names.append(cardmap.unit_sim(_attr(d.unit, "name")))
     cards = list(state.cards)
     v.next_card = TYPE_INDEX.get(CARD_TO_TYPE.get(_attr(cards[0], "name"), ""), -1)
     v.hand = [TYPE_INDEX.get(CARD_TO_TYPE.get(_attr(c, "name"), ""), -1) for c in cards[1:5]]
+    v.next_name = cardmap.sim_name(_attr(cards[0], "name"))
+    v.hand_names = [cardmap.sim_name(_attr(c, "name")) for c in cards[1:5]]
     n = state.numbers
     v.elixir = float(n.elixir.number)
     # Health bars are fractions already; a bar the reader cannot find reads 0 (destroyed).
@@ -117,6 +153,19 @@ def legal_mask(view: View, ready: list[int]) -> np.ndarray:
         ys, xs = np.nonzero(z)
         mask[[action_index(s, int(y), int(x)) for y, x in zip(ys, xs)]] = True
     return mask
+
+
+def playable_slots(view: View, ready: list[int]) -> list[int]:
+    """Hand slots we may play now, for any card: lit on screen, known, and affordable."""
+    out = []
+    for s in ready:
+        if not 0 <= s < HAND:
+            continue
+        name = view.hand_names[s]
+        c = cardmap.SIM_COST.get(name) if name else None
+        if c is not None and c <= view.elixir:
+            out.append(s)
+    return out
 
 
 def decode(action: int) -> tuple[int, int, int]:

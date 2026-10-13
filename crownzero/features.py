@@ -63,6 +63,11 @@ class View:
     clock: float = 0.0  # elapsed share of regulation time, 0..1
     double: bool = False
     overtime: bool = False
+    # Simulator card names, for ANY card (the type indices above only cover the 18 the
+    # network knows). Used by the live search; None where unknown.
+    hand_names: list = field(default_factory=lambda: [None] * HAND)
+    next_name: str | None = None
+    unit_names: list = field(default_factory=list)  # parallel to ``units``
 
     def raw(self) -> np.ndarray:
         """The non-unit part as one float row (see RAW_* offsets)."""
@@ -99,9 +104,12 @@ def from_sim(state, team: int, cards: dict, arena) -> View:
         t = TYPE_INDEX.get(name, -1)
         val = unit_value(name) if t >= 0 else ent.max_hp / 600
         v.units.append((own, t, min(int(x), NX - 1), min(int(y), NY - 1), flags, val))
+        v.unit_names.append(name)
     p = state.players[team]
     v.hand = [TYPE_INDEX.get(cards[c].name, -1) if c in cards else -1 for c in p.hand]
     v.next_card = TYPE_INDEX.get(cards[p.next_card].name, -1) if p.next_card in cards else -1
+    v.hand_names = [cards[c].name if c in cards else None for c in p.hand]
+    v.next_name = cards[p.next_card].name if p.next_card in cards else None
     v.elixir = p.elixir_milli / 1000
     v.towers = towers
     v.clock = min(state.tick / max(state.regular_ticks, 1), 1.0)

@@ -1,6 +1,8 @@
-"""Play the real game with the trained network.
+"""Play the real game.
 
-    python -m crownzero.real.play --deck hog --model models/student.pt
+    python -m crownzero.real.play --deck "Giant,Mini PEKKA,Fireball,Archers,Goblin Hut,Minions,Musketeer,Knight"
+
+--deck must be the 8 cards actually in your battle deck in the game (any cards).
 
 Needs Build-A-Bot installed in the same Python environment (see REAL_GAME.md): its
 emulator connection (ADB), screen reader and tap code are reused as they are; only the
@@ -23,21 +25,40 @@ from ..decks import CURATED
 from ..features import CARD_TYPES
 from ..model import load
 from ..student_bot import decide
-from .adapter import TYPE_TO_CARD, Clock, decode, legal_mask, view_from_state
+from . import cardmap
+from .adapter import (TYPE_TO_CARD, Clock, TowerTracker, decode, legal_mask,
+                      playable_slots, view_from_state)
 
 DISPLAY_W, DISPLAY_H = 720, 1280  # Build-A-Bot's coordinate space
 
 
-def make_actions(deck_types):
-    """Build-A-Bot wants one Action class per deck card; ours never score anything,
-    because the network decides instead."""
+def parse_deck(text: str) -> list[str]:
+    """--deck -> 8 Build-A-Bot card names. A curated name (hog, giant, ...) or 8 card names
+    separated by commas, as the game shows them ("Mini PEKKA", "The Log", ...)."""
+    names = CURATED[text] if text in CURATED else [n for n in text.split(",") if n.strip()]
+    deck, bad = [], []
+    for n in names:
+        b = cardmap.resolve_deck_name(n.strip())
+        (deck if b else bad).append(b or n.strip())
+    if bad:
+        raise SystemExit(f"unknown card name(s): {bad}. Use the names the game shows, e.g. "
+                         f"'Mini PEKKA', 'The Log', 'Goblin Hut'.")
+    if len(deck) != 8 or len(set(deck)) != 8:
+        raise SystemExit(f"--deck needs 8 different cards, got {len(set(deck))}: {deck}")
+    return deck
+
+
+def make_actions(deck):
+    """Build-A-Bot wants one Action class per deck card (Build-A-Bot names); ours never
+    score anything, because our brain decides instead."""
     from clashroyalebuildabot.actions.generic.action import Action
     from clashroyalebuildabot.namespaces.cards import Cards
 
     actions = []
-    for t in deck_types:
-        card = getattr(Cards, TYPE_TO_CARD[t].upper())
-        actions.append(type(f"{t}Action", (Action,),
+    for name in deck:
+        name = TYPE_TO_CARD.get(name, name)  # also accept our 18 type names
+        card = getattr(Cards, name.upper())
+        actions.append(type(f"{name}Action", (Action,),
                             {"CARD": card, "calculate_score": lambda self, s: [0]}))
     return actions
 
@@ -45,11 +66,17 @@ def make_actions(deck_types):
 def _quiet_hotkey(botmod):
     """Build-A-Bot listens for Ctrl+P with the ``keyboard`` package, which needs root on
     macOS and Linux. Where it cannot listen, let that thread sleep instead of crashing."""
+    import os
+    import sys
     import threading
 
     real_wait = botmod.keyboard.wait
 
     def wait(*args, **kwargs):
+        # On macOS/Linux without root the keyboard listener thread raises on its own
+        # (a harmless but alarming traceback), so do not start it at all there.
+        if sys.platform != "win32" and os.geteuid() != 0:
+            threading.Event().wait()
         try:
             return real_wait(*args, **kwargs)
         except Exception:  # no permission to read the keyboard: no pause hotkey
@@ -84,17 +111,46 @@ def _connect_network_devices():
     em.Emulator._restart_server = restart
 
 
+CARD_ART = Path(__file__).resolve().parent / "card_art"
+
+
+def _use_current_card_art():
+    """Some of Build-A-Bot's card pictures are older art than the live game shows (the
+    Goblin Hut is now a wooden hut with a goblin in it), and its card reader then mistakes
+    that card for another. Pictures in crownzero/real/card_art, taken from the live game,
+    replace those."""
+    import clashroyalebuildabot.detectors.card_detector as cd
+    from PIL import Image
+
+    if getattr(cd.CardDetector, "_crownzero_art", False):
+        return
+
+    def _calculate_card_hashes(self):
+        n = len(self.cards)
+        hashes = np.zeros((n, 3, self.hash_size * self.hash_size, self.HAND_SIZE), np.float32)
+        for i, card in enumerate(self.cards):
+            ours = CARD_ART / f"{card.name}.jpg"
+            path = ours if ours.exists() else Path(cd.IMAGES_DIR) / "cards" / f"{card.name}.jpg"
+            multi = self._calculate_multi_hash(Image.open(path))
+            hashes[i] = np.tile(np.expand_dims(multi, axis=2), (1, 1, self.HAND_SIZE))
+        return hashes
+
+    cd.CardDetector._calculate_card_hashes = _calculate_card_hashes
+    cd.CardDetector._crownzero_art = True
+
+
 def make_bot_class():
     import clashroyalebuildabot.bot.bot as botmod
 
     _connect_network_devices()
+    _use_current_card_art()
     from clashroyalebuildabot.bot.bot import Bot
     from clashroyalebuildabot.namespaces import Screens
 
     _quiet_hotkey(botmod)
 
     class NetworkBot(Bot):
-        def __init__(self, actions, config, net, play_threshold=0.5, after_play_s=1.0,
+        def __init__(self, actions, config, net, play_threshold=0.5, after_play_s=0.6,
                      recorder=None, live=None):
             super().__init__(actions=actions, config=config)
             self.net = net
@@ -105,6 +161,9 @@ def make_bot_class():
             self.clock = Clock(time.monotonic)
             self.plays = 0
             self.last_image = None
+            self.towers = TowerTracker()
+            self.blank_log = []  # recent share of the hand read as blank, mid-battle
+            self.warned_deck = False
             w = getattr(self.emulator, "width", DISPLAY_W)
             h = getattr(self.emulator, "height", DISPLAY_H)
             logger.info(f"device screen {w}x{h}")
@@ -134,7 +193,12 @@ def make_bot_class():
         def step(self, state):
             new_state = super().step(state)
             in_game = new_state is not None and new_state.screen == Screens.IN_GAME
+            if not in_game and self.clock.start is not None:
+                self.towers.reset()  # the battle ended
             self.clock.update(in_game)
+            if (self.recorder is not None and new_state is not None
+                    and new_state.screen == Screens.UNKNOWN):
+                self.recorder.frame(self.last_image, "unknown")  # to see what it misread
             return new_state
 
         def _handle_game_step(self, state):
@@ -143,24 +207,32 @@ def make_bot_class():
                 return
             self.clock.update(True)
             view = view_from_state(state, self.clock)
-            mask = legal_mask(view, list(state.ready))
+            p = self.towers.update([view.towers[1], view.towers[2], view.towers[4], view.towers[5]])
+            view.towers[1], view.towers[2], view.towers[4], view.towers[5] = p
+            self._check_deck(state, view)
             decision = dict(played=False)
-            if mask[1:].any():
-                if self.live is not None:
+            if self.live is not None:
+                slots = playable_slots(view, list(state.ready))
+                if slots:
                     t0 = time.perf_counter()
-                    a = self.live.decide(view)
-                    a = a if mask[a] else NOOP  # never attempt a move the screen says is illegal
+                    a = self.live.decide(view, allowed_slots=slots)
                     decision.update(p_wait=float("nan"), value=float("nan"),
                                     think_ms=round(1000 * (time.perf_counter() - t0)))
-                else:
+                    if a != NOOP and decode(a)[0] in slots:
+                        slot, x, y = decode(a)
+                        decision.update(played=True, slot=slot, tile=[x, y],
+                                        card=view.hand_names[slot])
+            else:
+                mask = legal_mask(view, list(state.ready))
+                if mask[1:].any():
                     actions, p_wait, value = decide(self.net, [view], [mask],
                                                     self.play_threshold)
                     a = actions[0]
                     decision.update(p_wait=float(p_wait[0]), value=float(value[0]))
-                if a != NOOP:
-                    slot, x, y = decode(a)
-                    decision.update(played=True, slot=slot, tile=[x, y],
-                                    card=CARD_TYPES[view.hand[slot]])
+                    if a != NOOP:
+                        slot, x, y = decode(a)
+                        decision.update(played=True, slot=slot, tile=[x, y],
+                                        card=CARD_TYPES[view.hand[slot]])
             if self.recorder is not None:
                 self.recorder.step(self.last_image, state, view, decision)
             if not decision["played"]:
@@ -181,13 +253,28 @@ def make_bot_class():
                             f"win estimate {decision['value']:+.2f}")
             time.sleep(self.after_play_s)
 
+        def _check_deck(self, state, view):
+            """If most of the hand keeps reading as blank mid-battle, the cards on screen
+            are not the --deck cards: say so loudly, once."""
+            if self.warned_deck or view.clock * 180 < 10:
+                return
+            self.blank_log.append(sum(c.name == "blank" for c in state.cards[1:]) / 4)
+            self.blank_log = self.blank_log[-30:]
+            if len(self.blank_log) == 30 and sum(self.blank_log) / 30 > 0.4:
+                self.warned_deck = True
+                logger.warning(
+                    "Most of your hand doesn't match --deck. The bot can only play cards it "
+                    "recognises: stop it (Ctrl+C) and pass the 8 cards that are really in your "
+                    "battle deck, e.g. --deck \"Giant,Mini PEKKA,Fireball,Archers,...\"")
+
     return NetworkBot
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--deck", default="hog",
-                    help=f"one of {sorted(CURATED)} or 8 comma-separated card names")
+    ap.add_argument("--deck", required=True,
+                    help="the 8 cards in your battle deck in the game, comma-separated, e.g. "
+                         "\"Giant,Mini PEKKA,Fireball,Archers,Goblin Hut,Minions,Musketeer,Knight\"")
     ap.add_argument("--model", default=str(Path(__file__).resolve().parents[2]
                                            / "models" / "student.pt"))
     ap.add_argument("--device-serial", default=None, help="adb serial, e.g. emulator-5554")
@@ -200,10 +287,12 @@ def main():
                     help="save every frame, what was detected and what the bot did, to DIR")
     args = ap.parse_args()
 
-    deck = CURATED[args.deck] if args.deck in CURATED else args.deck.split(",")
-    unknown = [c for c in deck if c not in CARD_TYPES]
-    if len(deck) != 8 or unknown:
-        raise SystemExit(f"deck must be 8 of {CARD_TYPES}; problem with {unknown or deck}")
+    deck = parse_deck(args.deck)
+    if args.brain == "network":
+        outside = [c for c in deck if cardmap.sim_name(c) not in CARD_TYPES]
+        if outside:
+            logger.warning(f"--brain network only knows 18 cards; it will never play {outside}. "
+                           f"Use --brain search (the default) for any card.")
 
     from clashroyalebuildabot.gui.utils import load_config
 
@@ -228,7 +317,7 @@ def main():
             raise SystemExit("--brain search needs the simulator: "
                              "uv pip install -e \"../crownzero[search]\"  "
                              f"(or run with --brain network). ({e})")
-        live = LiveSearch(deck)
+        live = LiveSearch([cardmap.sim_name(c) for c in deck])
         logger.info("brain: live search in the simulator")
     bot = make_bot_class()(make_actions(deck), config, net, args.play_threshold,
                            recorder=recorder, live=live)

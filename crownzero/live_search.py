@@ -76,8 +76,10 @@ class LiveSearch:
         rebuilt battle deals exactly the hand on screen."""
         rest = list(self.deck)
         order = []
-        for t in list(view.hand) + [view.next_card]:
-            name = CARD_TYPES[t] if t >= 0 else None
+        names = list(view.hand_names) + [view.next_name]
+        if not any(names):  # a View without names: fall back to the 18 card types
+            names = [CARD_TYPES[t] if t >= 0 else None for t in list(view.hand) + [view.next_card]]
+        for name in names:
             if name in rest:
                 rest.remove(name)
                 order.append(name)
@@ -100,8 +102,14 @@ class LiveSearch:
 
     def setup_for(self, view: View) -> MatchSetup:
         spawns = []
-        for own, t, x, y, flags, _ in view.units:
-            spec = self._spawn(0 if own else 1, proxy_card(t, flags), int(x), int(y))
+        names = view.unit_names if len(view.unit_names) == len(view.units) else [None] * len(view.units)
+        for (own, t, x, y, flags, _), name in zip(view.units, names):
+            team = 0 if own else 1
+            spec = None
+            if name is not None and name in self.by_name:
+                spec = self._spawn(team, SPAWN_AS.get(name, name), int(x), int(y))
+            if spec is None:  # unknown or refused: a calibrated card with the same role
+                spec = self._spawn(team, proxy_card(t, flags), int(x), int(y))
             if spec is None:
                 self.skipped += 1
             else:
@@ -120,11 +128,21 @@ class LiveSearch:
                           elixir_milli=[int(view.elixir * 1000), 5000],
                           tower_hp=tower_hp, spawns=spawns)
 
-    def decide(self, view: View) -> int:
-        """Best action id (own frame: slot x row x column, 0 = wait) for this View."""
+    def decide(self, view: View, allowed_slots=None) -> int:
+        """Best action id (own frame: slot x row x column, 0 = wait) for this View.
+        ``allowed_slots``: only consider these hand slots (the ones lit on screen)."""
         self.mutator.setup = self.setup_for(view)
         obs, _ = self.env.reset(seed=int(self.rng.integers(1 << 30)))
-        o = obs["blue"]
+        o = dict(obs["blue"])
+        if allowed_slots is not None:
+            planes = np.array(o["mask_planes"], copy=True)
+            mask = np.array(o["action_mask"], copy=True)
+            cells = planes.shape[1] * planes.shape[2]
+            for s in range(planes.shape[0]):
+                if s not in allowed_slots:
+                    planes[s] = 0
+                    mask[1 + s * cells: 1 + (s + 1) * cells] = 0
+            o["mask_planes"], o["action_mask"] = planes, mask
         return int(self.search.act(self.env, 0, o, o["action_mask"], self.rng))
 
 

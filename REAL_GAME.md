@@ -61,26 +61,26 @@ Start the bot with plain `python` as below, not `uv run` or `uv sync`: those re-
 environment and uninstall CrownZero (re-run the last line if that happens). To swap in a
 newer model later, just replace `crownzero/models/student.pt`.
 
-## 3. Set your deck in the game
+## 3. Tell the bot your deck
 
-The network knows the 18 cards the simulator models accurately. Make one of these your
-active battle deck in the game:
+`--deck` must be the 8 cards that are really in your battle deck in the game, by the
+names the game shows, separated by commas. Any cards work with the search brain:
 
-| `--deck` | Cards |
-|---|---|
-| `hog` | Hog Rider, Valkyrie, Musketeer, Skeleton Army, Tesla, The Log, Fireball, Baby Dragon |
-| `giant` | Giant, Musketeer, Minions, Knight, Archers, Fireball, Zap, Cannon |
-| `prince` | Prince, Giant, Wizard, Minions, Archers, Zap, Arrows, Knight |
-| `bait` | Goblin Barrel, Knight, Archers, Minions, Skeleton Army, Tesla, The Log, Fireball |
+```bash
+--deck "Giant,Mini PEKKA,Fireball,Archers,Goblin Hut,Minions,Musketeer,Knight"
+```
 
-Or pass any 8 of the 18 cards: `--deck HogRider,Valkyrie,...`.
+This matters more than anything else. The screen reader can only recognise the cards it
+is told about: with the wrong deck it misreads your hand and even takes your own troops
+for enemy troops. If most of your hand doesn't match, the bot prints a warning.
 
 ## 4. Pick a brain
 
 - `--brain search` (default, stronger): every move, the bot rebuilds the board it sees
   inside the simulator and tries its options there, like a chess engine. About 0.1-0.2 s
   per move. Needs the `[search]` install above.
-- `--brain network`: the trained network alone, no simulator. Weaker, lighter.
+- `--brain network`: the trained network alone, no simulator. Weaker, lighter, and it
+  only knows 18 cards.
 
 ## 5. Play
 
@@ -88,7 +88,7 @@ With the emulator running, from **inside the ClashRoyaleBuildABot folder** (so P
 finds Build-A-Bot), with its virtual environment active:
 
 ```bash
-python -m crownzero.real.play --deck hog
+python -m crownzero.real.play --deck "Giant,Mini PEKKA,Fireball,Archers,Goblin Hut,Minions,Musketeer,Knight" --device-serial 127.0.0.1:5555
 ```
 
 Then open Training Camp in the game and start a battle. The bot waits on menus and plays
