@@ -111,3 +111,54 @@ def test_bot_reads_hand_and_plays(monkeypatch, tmp_path, size, brain):
     assert (rec.dir / "00001.jpg").exists() and (rec.dir / "00001_ann.jpg").exists()
     lines = (rec.dir / "steps.jsonl").read_text().splitlines()
     assert lines and '"played": true' in lines[-1]
+
+
+def _bot(monkeypatch, deck_names):
+    import clashroyalebuildabot.bot.bot as botmod
+
+    from crownzero.model import load
+    from crownzero.real.play import make_actions, make_bot_class, parse_deck
+
+    deck = parse_deck(deck_names)
+    fake = FakeEmulator(Image.new("RGB", (368, 652)))
+    monkeypatch.setattr(botmod, "Emulator", lambda **kw: fake)
+    monkeypatch.setattr(botmod.keyboard, "wait",
+                        lambda *a, **k: __import__("threading").Event().wait())
+    config = {"bot": {"auto_start_game": False, "load_deck": False, "enable_gui": False,
+                      "log_level": "INFO"},
+              "adb": {"ip": "127.0.0.1", "device_serial": "fake"},
+              "visuals": {"save_labels": False, "save_images": False, "show_images": False},
+              "ingame": {"play_action": 0.0}}
+    return make_bot_class()(make_actions(deck), config, load(MODEL), after_play_s=0.0)
+
+
+def _det(name, x, y):
+    from types import SimpleNamespace as NS
+    return NS(unit=NS(name=name, category="troop", target="ground", transport="ground"),
+              position=NS(tile_x=x, tile_y=y, bbox=(0, 0, 1, 1), conf=0.9))
+
+
+@pytest.mark.skipif(not MODEL.exists(), reason="train a model first")
+def test_our_deploying_troop_is_not_an_enemy(monkeypatch):
+    """Recorded 2026-10-13: the bot placed a Giant in the corner, the reader called the
+    deploying Giant an enemy, and the bot played Minions on top of it."""
+    import time
+
+    from clashroyalebuildabot.namespaces.state import State
+
+    bot = _bot(monkeypatch, "Giant,Mini PEKKA,Fireball,Archers,Goblin Cage,Minions,Musketeer,Knight")
+    bot.recent_plays.append((time.monotonic(), 17, 1, bot.units_of["Giant"]))
+    st = State(allies=[], enemies=[_det("giant", 17, 0), _det("giant", 3, 25)],
+               numbers=None, cards=(), ready=[], screen=None)
+    fixed = bot._own_recent_plays(st)
+    assert [(d.unit.name, d.position.tile_x) for d in fixed.allies] == [("giant", 17)]
+    assert [(d.unit.name, d.position.tile_x) for d in fixed.enemies] == [("giant", 3)]
+
+
+def test_decorations_outside_the_arena_are_ignored():
+    """Recorded 2026-10-13: two lamps beside our right tower read as an enemy Executioner
+    and Monk at tile x 18, every frame."""
+    from crownzero.real.adapter import in_arena
+    assert not in_arena(_det("executioner", 18, 4))
+    assert not in_arena(_det("monk", -1, 2))
+    assert in_arena(_det("giant", 17, 0))

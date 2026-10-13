@@ -33,6 +33,7 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v2 | v1 retrained on its own mistakes (DAgger correction round) | No better than v1 (30-30 head to head), not shipped |
 | v3 | Live search: rebuild the board seen on screen in the simulator, search it every move | 18-2 against v1; 20-0 against defend and patient |
 | v4 | Any deck, any card; current card art; tower bars smoothed; deck mismatch warning | Fixes the misread hand found in real-game recordings |
+| v4.1 | Ignores arena decorations read as troops; our own deploying troops stay ours | Fixes the phantom defence found in the next recording |
 
 ### What the real-game recordings showed (v3 → v4)
 
@@ -45,6 +46,17 @@ showed the bot's problems were mostly perception, not strategy:
 - Build-A-Bot's Goblin Hut picture is older art than the live game's, so even with the
   right deck it read the Goblin Hut as another card.
 - A princess tower on 84 HP has a bar too short to read and came out as "destroyed".
+
+A second recording (v4, PEKKA's Playhouse arena) showed two more:
+
+- Two lamps beside our right tower, outside the battlefield, were detected as an enemy
+  Executioner and Monk on every frame. The bot "defended" against them with its very
+  first card, in the corner.
+- That card, still in its deploy animation, was then classified as an enemy, so the bot
+  played another card on top of it: a chain of plays into an empty corner.
+
+v4.1 drops detections outside the battlefield and, for four seconds after each play,
+treats that card's units near where we placed them as ours.
 
 v4 takes any 8 cards by name, maps all 110 cards and 96 unit types to the simulator, uses
 in-game card art where Build-A-Bot's is outdated, smooths the tower bars and warns when

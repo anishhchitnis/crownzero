@@ -1,0 +1,15 @@
+numpy>=2.0
+torch>=2.2
+
+[real]
+loguru
+
+[search]
+royalegym==0.1.23
+royalesim==0.1.33
+loguru
+
+[sim]
+royalegym==0.1.23
+royalesim==0.1.33
+pytest

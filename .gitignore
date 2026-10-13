@@ -3,7 +3,3 @@ __pycache__/
 .venv/
 *.log
 replays/*.msgpack
-*.egg-info/
-data/
-dist/
-.pytest_cache/

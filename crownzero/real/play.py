@@ -162,6 +162,9 @@ def make_bot_class():
             self.plays = 0
             self.last_image = None
             self.towers = TowerTracker()
+            self.recent_plays = []  # (time, tile x, tile y, unit names) of our last plays
+            self.units_of = {cardmap.sim_name(a.CARD.name): {u.name for u in a.CARD.units}
+                             for a in actions}
             self.blank_log = []  # recent share of the hand read as blank, mid-battle
             self.warned_deck = False
             w = getattr(self.emulator, "width", DISPLAY_W)
@@ -206,6 +209,7 @@ def make_bot_class():
                 time.sleep(0.5)
                 return
             self.clock.update(True)
+            state = self._own_recent_plays(state)
             view = view_from_state(state, self.clock)
             p = self.towers.update([view.towers[1], view.towers[2], view.towers[4], view.towers[5]])
             view.towers[1], view.towers[2], view.towers[4], view.towers[5] = p
@@ -244,6 +248,8 @@ def make_bot_class():
 
             self.play_action(Play)
             self.plays += 1
+            self.recent_plays.append((time.monotonic(), *decision["tile"],
+                                      self.units_of.get(decision["card"], set())))
             if self.live is not None:
                 logger.info(f"play {self.plays}: {decision['card']} at tile "
                             f"{tuple(decision['tile'])} | searched in {decision['think_ms']} ms")
@@ -252,6 +258,26 @@ def make_bot_class():
                             f"{tuple(decision['tile'])} | P(wait) {decision['p_wait']:.2f} | "
                             f"win estimate {decision['value']:+.2f}")
             time.sleep(self.after_play_s)
+
+        def _own_recent_plays(self, state, window_s=4.0, dx=2, dy=3):
+            """A troop we just placed is still in its deploy animation, and the reader's
+            ally/enemy classifier gets those wrong: our own Giant in the corner was read as
+            an enemy Giant, and the bot then threw Minions on top of it, and so on. For a
+            few seconds after a play, detections of that card's units near where we put
+            them are ours."""
+            import dataclasses
+
+            now = time.monotonic()
+            self.recent_plays = [p for p in self.recent_plays if now - p[0] < window_s]
+            if not self.recent_plays or not state.enemies:
+                return state
+            allies, enemies = list(state.allies), []
+            for d in state.enemies:
+                p = d.position
+                ours = any(d.unit.name in units and abs(p.tile_x - x) <= dx
+                           and abs(p.tile_y - y) <= dy for _, x, y, units in self.recent_plays)
+                (allies if ours else enemies).append(d)
+            return dataclasses.replace(state, allies=allies, enemies=enemies)
 
         def _check_deck(self, state, view):
             """If most of the hand keeps reading as blank mid-battle, the cards on screen

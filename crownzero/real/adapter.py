@@ -119,11 +119,22 @@ def unit_row(detection, own: bool, unknown_values: dict | None = None):
     return (int(own), t, x, y, flags, float(value))
 
 
+def in_arena(detection) -> bool:
+    """Is the detection on the battlefield? The unit detector also fires on arena
+    decorations outside it: in PEKKA's Playhouse two lamps beside our right tower were
+    read as an enemy Executioner and Monk on every frame, and the bot spent its whole
+    elixir "defending" against them. The battlefield is tiles x 0-17, y 0-31."""
+    p = detection.position
+    return 0 <= p.tile_x < NX and 0 <= p.tile_y < NY
+
+
 def view_from_state(state, clock: Clock, unknown_values: dict | None = None) -> View:
     """A View from a Build-A-Bot State."""
     v = View()
     for own, dets in ((True, state.allies), (False, state.enemies)):
         for d in dets:
+            if not in_arena(d):
+                continue
             v.units.append(unit_row(d, own, unknown_values))
             v.unit_names.append(cardmap.unit_sim(_attr(d.unit, "name")))
     cards = list(state.cards)
