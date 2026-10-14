@@ -73,7 +73,9 @@ class TowerTracker:
     heal; recorded 0.77, 0.54, 0.77). A 0 alone is "almost destroyed" (4%), and a sudden 0
     from a healthy bar is ignored for a few frames. A tower is destroyed when its level
     badge is gone (see towers.py) and its bar reads under GONE_BELOW, for GONE_FRAMES frames
-    in a row; then it stays destroyed.
+    in a row; then it stays destroyed. Only a tower seen standing (a bar read at
+    STOOD_ABOVE or more) and already worn under half can fall: at the start of a replay the
+    bars and badges are not drawn yet, and that read as four destroyed towers.
 
     Also tracks the enemy King Tower from its bar: the median of its last readings, never
     rising."""
@@ -82,6 +84,8 @@ class TowerTracker:
     HOLD = 4  # frames a healthy bar may vanish before we believe it
     GONE_FRAMES = 3
     GONE_BELOW = 0.3
+    STOOD_ABOVE = 0.25
+    FALLS_BELOW = 0.5
 
     def __init__(self):
         self.reset()
@@ -92,6 +96,7 @@ class TowerTracker:
         self.zeros = [0] * 4
         self.gone = [0] * 4
         self.dead = [False] * 4
+        self.stood = [False] * 4
         self.king = 1.0
         self.king_reads = []
 
@@ -103,7 +108,10 @@ class TowerTracker:
             if self.dead[i]:
                 out.append(0.0)
                 continue
-            if badges is not None and not badges[i] and r < self.GONE_BELOW:
+            if r >= self.STOOD_ABOVE:
+                self.stood[i] = True
+            if (badges is not None and not badges[i] and r < self.GONE_BELOW
+                    and self.stood[i] and self.last[i] < self.FALLS_BELOW):
                 self.gone[i] += 1
                 if self.gone[i] >= self.GONE_FRAMES:
                     self.dead[i] = True

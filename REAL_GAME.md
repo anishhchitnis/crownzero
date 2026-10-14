@@ -89,6 +89,12 @@ taken fresh each time (`--capture stream` uses Build-A-Bot's video stream instea
 With the search brain, `--opponent-model none` makes the look-ahead assume the opponent
 never answers (the v4.1 behaviour); the default, `defender`, has it defend our pushes.
 
+With the search brain, `--prior` sets the placement prior learnt from top players' replays
+(see [RECORD_REPLAYS.md](RECORD_REPLAYS.md)): `auto` (the default) uses
+`crownzero/models/pro_prior.pt` when it is there, `none` turns it off. The prior suggests
+where a pro would put each card in hand; the simulator still decides between those spots
+and the usual ones.
+
 ## 5. Play
 
 With the emulator running, from **inside the ClashRoyaleBuildABot folder** (so Python

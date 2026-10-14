@@ -31,6 +31,7 @@ TROOP_SPOTS = [(3, 10), (14, 10), (8, 8), (9, 8), (3, 14), (14, 14), (8, 1), (9,
 BUILDING_SPOTS = [(8, 9), (9, 9), (8, 11), (9, 11)]
 POCKET_SPOTS = ([(3, 20), (5, 19)], [(14, 20), (12, 19)])  # left, right lane
 SNAP_LIMIT = 3.0  # tiles: an anchor further than this from any legal cell is dropped
+PRIOR_FLOOR = 5.0  # log-probability units: below this, the prior's mark-down stops growing
 
 
 class Weights:
@@ -54,10 +55,22 @@ class SearchBot:
                  opponent=None, reply_ticks: int = 20,
                  defend_horizon_ticks: int | None = None, spawn_scaling: bool = True,
                  pocket_spots: bool = True, reserve: float = 0.0,
-                 reserve_elixir: float = 3.0) -> None:
+                 reserve_elixir: float = 3.0, prior=None, prior_weight: float = 0.3,
+                 prior_k: int = 3) -> None:
         """``opponent``: an object with ``reply(state, team, mask) -> action``. When given,
         every rollout lets the opponent answer ``reply_ticks`` after our move (a two-ply
-        search) instead of assuming it stands still."""
+        search) instead of assuming it stands still.
+
+        ``prior``: a placement prior learnt from pro replays (replays/prior.py, ProPrior).
+        The ``prior_k`` tiles it rates highest for each card in hand are tried as extra
+        candidates, and a play is marked down by ``prior_weight`` elixir for every unit
+        of log-probability it falls below the card's best tile (at most PRIOR_FLOOR
+        units): the simulator still decides, the prior breaks near-ties toward where
+        pros play."""
+        self.prior = prior
+        self.prior_weight = prior_weight
+        self.prior_k = prior_k
+        self._prior_maps = {}
         self.opponent = opponent
         self.reply_ticks = reply_ticks
         self.spawn_scaling = spawn_scaling  # value summoned units by their own size
@@ -117,7 +130,7 @@ class SearchBot:
             if cmd is None:
                 continue
             engine.load_state(blob)
-            value = self._rollout(env, engine, cmd, team)
+            value = self._rollout(env, engine, cmd, team) + self._prior_bonus(action)
             scores.append((value, action))
             if value > best_value:
                 best_value, best_action = value, action
@@ -145,8 +158,39 @@ class SearchBot:
         return self._value(engine.state(), team)
 
     # ---------------------------------------------------------------- candidates
+    def _prior_for(self, state, team: int, planes: np.ndarray) -> dict:
+        """slot -> (32, 18) log-probabilities of the prior, on the cells allowed now."""
+        from .replays.prior import board_features
+
+        board = board_features(state, team, self.cards, self.arena)
+        me = state.players[team]
+        clock = state.tick / 20.0
+        maps = {}
+        for slot in range(len(me.hand)):
+            card = self.cards.get(me.hand[slot])
+            if card is None or not planes[slot].any():
+                continue
+            logp = self.prior.placement(board, card.name, me.elixir_milli / 1000, clock)
+            logp = np.where(planes[slot] > 0, logp, -np.inf)
+            if np.isfinite(logp).any():
+                maps[slot] = logp
+        return maps
+
+    def _prior_bonus(self, action: int) -> float:
+        if not self._prior_maps or action == NOOP:
+            return 0.0
+        slot, cell = divmod(action - 1, NX * NY)
+        y, x = divmod(cell, NX)
+        logp = self._prior_maps.get(slot)
+        if logp is None:
+            return 0.0
+        gap = float(np.nanmax(logp[np.isfinite(logp)]) - logp[y, x]) if np.isfinite(logp[y, x]) \
+            else PRIOR_FLOOR
+        return -self.prior_weight * min(gap, PRIOR_FLOOR)
+
     def _candidates(self, state, team: int, planes: np.ndarray) -> list[int]:
         me = state.players[team]
+        self._prior_maps = self._prior_for(state, team, planes) if self.prior is not None else {}
         enemies = []  # (x, y, value) in own-frame tiles, non-tower enemy units
         enemy_towers = []
         princess_x = []  # own-frame x of the enemy princess towers still standing
@@ -206,6 +250,12 @@ class SearchBot:
                 anchors = BUILDING_SPOTS + [(x, max(y - 4, 2)) for x, y in reactive[::2]]
             else:
                 anchors = TROOP_SPOTS + reactive + pockets
+            if slot in self._prior_maps:  # where a pro would put this card
+                logp = self._prior_maps[slot]
+                for k in np.argsort(logp, axis=None)[::-1][:self.prior_k]:
+                    y, x = divmod(int(k), NX)
+                    if np.isfinite(logp[y, x]):
+                        out.add(action_index(slot, y, x))
             cells = np.argwhere(plane > 0)  # rows of (y, x)
             for ax, ay in anchors:
                 d2 = (cells[:, 0] - ay) ** 2 + (cells[:, 1] - ax) ** 2

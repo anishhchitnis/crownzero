@@ -60,6 +60,9 @@ class LiveSearch:
         if "reply" in kw:  # the opponent answers our play inside the rollouts
             from .opponent_model import make_opponent
             kw["opponent"] = make_opponent(kw.pop("reply"))
+        if isinstance(kw.get("prior"), (str, bytes)) or hasattr(kw.get("prior"), "__fspath__"):
+            from .replays.prior import ProPrior  # a path to a trained placement prior
+            kw["prior"] = ProPrior(kw["prior"])
         self.search = SearchBot(**kw)
         self.deck = list(deck)
         self.enemy_deck = [self.by_name[n] for n in CURATED["giant"]]

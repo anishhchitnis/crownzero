@@ -45,12 +45,24 @@ def test_tower_bar_that_vanishes_is_not_a_destroyed_tower():
 
 def test_a_tower_with_no_bar_and_no_badge_is_destroyed():
     t = TowerTracker()
-    t.update([1, 1, 0.2, 1])
+    for r in (0.9, 0.6, 0.4, 0.2, 0.2):  # worn down
+        t.update([1, 1, r, 1])
     t.update([1, 1, 0.0, 1], [True, True, False, True])
     t.update([1, 1, 0.0, 1], [True, True, False, True])
     assert t.update([1, 1, 0.0, 1], [True, True, False, True])[2] == 0.0
     # destroyed for good, even if something gold stands on the rubble later
     assert t.update([1, 1, 0.0, 1], [True] * 4)[2] == 0.0
+
+
+def test_towers_not_drawn_yet_are_not_destroyed():
+    # the first frames of a replay: no bars, no badges
+    t = TowerTracker()
+    for _ in range(5):
+        assert t.update([0.0] * 4, [False] * 4) != [0.0] * 4
+    # a healthy tower whose badge is hidden is not destroyed either
+    t = TowerTracker()
+    for _ in range(5):
+        assert t.update([1, 1, 0.9, 1], [True, True, False, True])[2] > 0.5
 
 
 def test_a_one_frame_dip_is_not_believed():

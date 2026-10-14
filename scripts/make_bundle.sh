@@ -8,5 +8,5 @@ cd "$(dirname "$ROOT")"
 rm -f "$OUT"
 zip -qr "$OUT" crownzero \
   -x "crownzero/data/*" "crownzero/logs*" "crownzero/dist/*" "crownzero/replays/*.msgpack" \
-     "crownzero/models/_*" "crownzero/models/prelim*" "*/__pycache__/*" "*.pyc" "crownzero/.pytest_cache/*"
+     "crownzero/models/_*" "crownzero/models/prelim*" "*/__pycache__/*" "*.pyc" "crownzero/.pytest_cache/*" "crownzero/.git/*"
 echo "$OUT"

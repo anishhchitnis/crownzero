@@ -51,6 +51,7 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--crbab", default=None, help="Build-A-Bot checkout, if not installed")
     ap.add_argument("--opponent-model", choices=["defender", "none"], default="defender")
+    ap.add_argument("--prior", default="auto", help="pro placement prior: auto, none or a path")
     ap.add_argument("--explain", default="", help="frames to explain, e.g. 00119,00122: "
                                                   "what was seen and the best-scored plays")
     args = ap.parse_args()
@@ -103,6 +104,8 @@ def main():
     kw = dict(play.REAL_GAME_SEARCH)
     if args.opponent_model == "none":
         kw.pop("reply")
+    if play.prior_path(args.prior):
+        kw["prior"] = play.prior_path(args.prior)
     live = LiveSearch([cardmap.sim_name(c) for c in deck], kw)
     bot = play.make_bot_class()(play.make_actions(deck), config,
                                 load(ROOT / "models" / "student.pt"), recorder=recorder,

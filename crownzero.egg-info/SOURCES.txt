@@ -11,6 +11,7 @@ crownzero/elo.py
 crownzero/features.py
 crownzero/live_search.py
 crownzero/model.py
+crownzero/opponent_model.py
 crownzero/search_bot.py
 crownzero/student_bot.py
 crownzero/train.py
@@ -24,8 +25,17 @@ crownzero/real/adapter.py
 crownzero/real/capture.py
 crownzero/real/cardmap.py
 crownzero/real/cardmap_data.py
+crownzero/real/device.py
+crownzero/real/perception.py
 crownzero/real/play.py
 crownzero/real/recorder.py
+crownzero/real/towers.py
+crownzero/replays/__init__.py
+crownzero/replays/extract.py
+tests/test_device.py
+tests/test_extract.py
+tests/test_opponent_model.py
+tests/test_perception.py
 tests/test_real_adapter.py
 tests/test_real_bridge_smoke.py
 tests/test_real_v4.py

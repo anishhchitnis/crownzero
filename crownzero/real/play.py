@@ -38,6 +38,18 @@ DISPLAY_W, DISPLAY_H = 720, 1280  # Build-A-Bot's coordinate space
 # (v4.2), and the first 3 banked elixir are worth double (v4.5; 22-18 and 21-19 at half
 # strength in simulator A/B tests, and it fixes a recorded elixir dump).
 REAL_GAME_SEARCH = {"reply": "defender", "reserve": 1.0}
+PRO_PRIOR = Path(__file__).resolve().parents[2] / "models" / "pro_prior.pt"
+
+
+def prior_path(value: str) -> str | None:
+    """--prior: "auto" = models/pro_prior.pt when it is there, "none" = off, or a path."""
+    if value == "none":
+        return None
+    if value == "auto":
+        return str(PRO_PRIOR) if PRO_PRIOR.exists() else None
+    if not Path(value).expanduser().exists():
+        raise SystemExit(f"--prior: no such file {value}")
+    return str(Path(value).expanduser())
 
 
 def parse_deck(text: str) -> list[str]:
@@ -409,6 +421,9 @@ def main():
                          "Build-A-Bot's video stream (can fall seconds behind)")
     ap.add_argument("--record", default=None, metavar="DIR",
                     help="save every frame, what was detected and what the bot did, to DIR")
+    ap.add_argument("--prior", default="auto", metavar="PATH|auto|none",
+                    help="placement prior learnt from pro replays (search brain): auto uses "
+                         "models/pro_prior.pt if present; none turns it off")
     args = ap.parse_args()
 
     deck = parse_deck(args.deck)
@@ -432,6 +447,7 @@ def main():
         from .recorder import Recorder
         recorder = Recorder(args.record, dict(deck=deck, model=args.model, brain=args.brain,
                                               opponent_model=args.opponent_model,
+                                              prior=args.prior,
                                               input=args.input, capture=args.capture,
                                               play_threshold=args.play_threshold))
         logger.info(f"recording to {recorder.dir}")
@@ -446,9 +462,13 @@ def main():
         kw = dict(REAL_GAME_SEARCH)
         if args.opponent_model == "none":
             kw.pop("reply")
+        prior = prior_path(args.prior)
+        if prior:
+            kw["prior"] = prior
         live = LiveSearch([cardmap.sim_name(c) for c in deck], kw)
         logger.info(f"brain: live search in the simulator (opponent model: "
-                    f"{args.opponent_model})")
+                    f"{args.opponent_model}; pro placement prior: "
+                    f"{Path(prior).name if prior else 'off'})")
     bot = make_bot_class(capture=args.capture)(make_actions(deck), config, net,
                                               args.play_threshold, recorder=recorder,
                                               live=live, input_mode=args.input)

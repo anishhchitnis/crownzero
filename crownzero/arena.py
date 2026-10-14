@@ -42,6 +42,8 @@ def make_bot(spec):
         if "reply" in kw:
             from .opponent_model import make_opponent
             kw["opponent"] = make_opponent(kw.pop("reply"))
+        if isinstance(kw.get("prior"), str):  # a trained pro placement prior, by path
+            kw["prior"] = _cached_prior(kw["prior"])
         return SearchBot(**kw)
     if name == "live-search":  # search on a board rebuilt from screen-reader-level info
         from .live_search import LiveSearchBot
@@ -53,6 +55,14 @@ def make_bot(spec):
 
 
 _STUDENTS = {}
+_PRIORS = {}
+
+
+def _cached_prior(path):
+    if path not in _PRIORS:
+        from .replays.prior import ProPrior
+        _PRIORS[path] = ProPrior(path)
+    return _PRIORS[path]
 
 
 def _cached_student(path, play_threshold):
@@ -182,7 +192,10 @@ def match(spec_a, spec_b, games: int = 40, seed: int = 0, deck=DEFAULT_DECK,
     jobs = [(spec_a, spec_b, seed + g, a_is_blue, deck)
             for a_is_blue in (True, False) for g in range(per_seat)]
     workers = workers or mp.cpu_count()
-    with mp.get_context("fork").Pool(workers) as pool:
-        results = pool.map(_job, jobs, chunksize=1)
+    if workers == 1:  # in this process (no fork: torch may already be running threads)
+        results = [_job(j) for j in jobs]
+    else:
+        with mp.get_context("fork").Pool(workers) as pool:
+            results = pool.map(_job, jobs, chunksize=1)
     name = lambda s: s if isinstance(s, str) else s[0]  # noqa: E731
     return Match(name_a or name(spec_a), name_b or name(spec_b), results)

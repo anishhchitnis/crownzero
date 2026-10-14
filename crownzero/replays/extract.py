@@ -1,5 +1,6 @@
-"""Turn a recorded battle into plays: who played which card, where, when, and what the
-board looked like just before.
+"""Turn one of the bot's own recorded battles into plays: who played which card, where,
+when, and what the board looked like just before. (Replay videos of other players are read
+by replay.py, which this hands them to.)
 
     python -m crownzero.replays.extract ~/Downloads/cr_replays/tv_royale_1_.../ [--fps 4]
 
@@ -413,6 +414,12 @@ def main():
     ap.add_argument("--fps", type=float, default=4.0)
     ap.add_argument("--out", default=None, help="plays.jsonl (default: inside the folder)")
     args = ap.parse_args()
+    if list(Path(args.folder).expanduser().glob("part_*.mp4")):  # a replay video
+        import sys
+
+        from . import replay
+        sys.argv = [sys.argv[0], args.folder, "--fps", str(args.fps)]
+        return replay.main()
     plays = extract(Path(args.folder).expanduser(), args.fps)
     out = Path(args.out) if args.out else Path(args.folder).expanduser() / "plays.jsonl"
     with open(out, "w") as f:
