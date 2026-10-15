@@ -57,6 +57,9 @@ class LiveSearch:
         self.mutator = _Fixed()
         self.env = ClashParallelEnv(engine=self.engine, state_mutator=self.mutator)
         kw = dict(search_kwargs or {})
+        # rebuild the opponent with the elixir we counted for them (View.enemy_elixir)
+        # rather than 5. Off: in the simulator, with the reserve below, it lost 15-25.
+        self.use_enemy_elixir = kw.pop("count_enemy_elixir", False)
         if "reply" in kw:  # the opponent answers our play inside the rollouts
             from .opponent_model import make_opponent
             kw["opponent"] = make_opponent(kw.pop("reply"))
@@ -132,7 +135,10 @@ class LiveSearch:
         start = max(start, 90)
         return MatchSetup(decks=[self._ids(self._deck_order(view)), self.enemy_deck],
                           shuffle=0, start_tick=start,
-                          elixir_milli=[int(view.elixir * 1000), 5000],
+                          elixir_milli=[int(view.elixir * 1000),
+                                        int((view.enemy_elixir if self.use_enemy_elixir
+                                             and view.enemy_elixir is not None else 5.0)
+                                            * 1000)],
                           tower_hp=tower_hp, spawns=spawns)
 
     def decide(self, view: View, allowed_slots=None) -> int:
@@ -160,7 +166,11 @@ class LiveSearchBot:
     name = "live-search"
 
     def __init__(self, search_kwargs=None):
-        self.search_kwargs = search_kwargs
+        kw = dict(search_kwargs or {})
+        # tell the rebuild the opponent's elixir (in the simulator we know it exactly; the
+        # real game estimates it, perception.EnemyElixir)
+        self.count_enemy = kw.get("count_enemy_elixir", False)
+        self.search_kwargs = kw or None
         self.live = None
         self.cards = None
 
@@ -179,5 +189,7 @@ class LiveSearchBot:
             self.live = LiveSearch(deck, self.search_kwargs)
         view = from_sim(st, team, self.cards, self.arena)
         view.elixir = float(np.floor(view.elixir + 1e-6))  # the screen shows whole elixir
+        if self.count_enemy:
+            view.enemy_elixir = st.players[1 - team].elixir_milli / 1000
         a = self.live.decide(view)
         return a if mask[a] else NOOP

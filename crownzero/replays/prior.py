@@ -321,7 +321,12 @@ def train(files, out: str | None = None, epochs: int = 40, seed: int = 0,
                   replays=len(replays), plays=len(examples))
     if out:
         Path(out).parent.mkdir(parents=True, exist_ok=True)
-        torch.save(dict(state=net.state_dict(), vocab=vocab, report=report, net=net_kw), out)
+        kinds: dict[str, int] = {}
+        for r in examples:
+            k = card_info(r.get("sim"), r.get("cost"), r.get("kind"))["kind"]
+            kinds[k] = kinds.get(k, 0) + 1
+        torch.save(dict(state=net.state_dict(), vocab=vocab, report=report, net=net_kw,
+                        kind_counts=kinds), out)
         log(f"saved {out}")
     return net, report
 
@@ -342,11 +347,24 @@ class ProPrior:
         self.net.load_state_dict(blob["state"])
         self.net.eval()
         self.cache = {}
+        self.kind_counts = blob.get("kind_counts", {})
+
+    # a kind of card the replays showed fewer plays of than this gets no advice: the first
+    # prior had seen 11 buildings, and sent a Tombstone behind the King Tower to open a
+    # game (recorded 2026-10-13)
+    MIN_KIND_PLAYS = 30
+
+    def knows(self, sim_name: str) -> bool:
+        kind = card_info(sim_name, None, None)["kind"]
+        return self.kind_counts.get(kind, 0) >= self.MIN_KIND_PLAYS
 
     def placement(self, board: dict, sim_name: str, elixir: float = 5.0,
-                  clock: float = 60.0) -> np.ndarray:
+                  clock: float = 60.0) -> np.ndarray | None:
+        """None for a kind of card the prior has too few examples of."""
         import torch
 
+        if not self.knows(sim_name):
+            return None
         info = card_info(sim_name, None, None)
         planes, g, idx, legal = encode(board, info, elixir, clock, self.vocab)
         with torch.no_grad():

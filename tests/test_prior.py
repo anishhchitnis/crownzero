@@ -164,7 +164,7 @@ def test_live_search_uses_the_prior(tmp_path):
     from crownzero.live_search import LiveSearch
 
     f = tmp_path / "r.jsonl"
-    rows = _examples(40)
+    rows = _examples(80)  # 40 Knights and 40 Fireballs: enough of each kind
     for i, r in enumerate(rows):
         r["replay"] = f"replay{i % 2}"
     f.write_text("\n".join(json.dumps(r) for r in rows))
@@ -184,7 +184,8 @@ def test_live_search_uses_the_prior(tmp_path):
     a = live.decide(v, allowed_slots=[0, 1, 2, 3])
     assert a != 0
     maps = live.search._prior_maps
-    assert set(maps) == {0, 1, 2, 3} and all(np.isfinite(m).any() for m in maps.values())
+    # troops get advice; the Goblin Hut (slot 1) does not: no buildings in these replays
+    assert set(maps) == {0, 2, 3} and all(np.isfinite(m).any() for m in maps.values())
 
 
 def test_prior_bonus_marks_down_unlikely_tiles():
@@ -198,3 +199,53 @@ def test_prior_bonus_marks_down_unlikely_tiles():
     assert bot._prior_bonus(action_index(1, 10, 10)) == -1.0
     assert bot._prior_bonus(action_index(1, 8, 2)) == -0.5 * PRIOR_FLOOR
     assert bot._prior_bonus(action_index(2, 3, 4)) == 0.0  # no map for that slot
+
+
+def test_side_tracker_keeps_our_spawners_units_ours():
+    from types import SimpleNamespace as NS
+
+    from crownzero.real.perception import SideTracker
+
+    clock = {"t": 0.0}
+    st = SideTracker(now=lambda: clock["t"])
+
+    def det(name, x, y):
+        return NS(unit=NS(name=name, category="troop"), position=NS(tile_x=x, tile_y=y))
+
+    # our Tombstone is never detected; its Skeletons are read as enemies
+    st.own_play("Tombstone", 12, 3)
+    for k in range(12):
+        clock["t"] = k * 0.4
+        sk = det("skeleton", 13, 5 + k)       # walking up the lane, across the river
+        allies, enemies = st.update([], [sk])
+        assert sk in allies and not enemies, k
+    # an enemy Skeleton far from our Tombstone stays an enemy
+    far = det("skeleton", 3, 8)
+    allies, enemies = st.update([], [far])
+    assert far in enemies
+    # once the Tombstone is long gone, new Skeletons there are enemies again
+    clock["t"] = 100.0
+    late = det("skeleton", 12, 4)
+    for _ in range(5):
+        allies, enemies = st.update([], [late])
+    assert late in enemies
+
+
+def test_matchmaking_screen_means_sit_out():
+    from PIL import Image
+
+    from crownzero.real.fairplay import HERE, FairPlay, is_matchmaking
+
+    search = Image.new("RGB", (368, 652), (30, 60, 120))
+    search.paste(Image.open(HERE / "searching_banner.png"), (90, 52))
+    search.paste(Image.open(HERE / "searching_cancel.png"), (128, 462))
+    battle = Image.new("RGB", (368, 652), (60, 140, 60))
+    assert is_matchmaking(search) and not is_matchmaking(battle)
+    fp = FairPlay()
+    assert not fp.update(battle, in_game=False)
+    assert fp.update(search, in_game=False)
+    assert fp.update(battle, in_game=False)   # loading screens: still sitting out
+    assert fp.update(battle, in_game=True)    # the battle itself
+    for _ in range(FairPlay.END_FRAMES):
+        out = fp.update(battle, in_game=False)  # battle over
+    assert not out

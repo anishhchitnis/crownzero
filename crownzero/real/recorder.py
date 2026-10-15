@@ -109,7 +109,9 @@ class Recorder:
                 "left_ally_princess_hp", "right_ally_princess_hp",
                 "left_enemy_princess_hp", "right_enemy_princess_hp")},
             view=dict(hand=view.hand, next=view.next_card, elixir=view.elixir,
-                      towers=view.towers, clock=round(view.clock, 3), units=len(view.units)),
+                      towers=view.towers, clock=round(view.clock, 3), units=len(view.units),
+                      enemy_elixir=(None if getattr(view, "enemy_elixir", None) is None
+                                    else round(view.enemy_elixir, 1))),
             decision=decision,
         )
         self.log.write(json.dumps(row) + "\n")

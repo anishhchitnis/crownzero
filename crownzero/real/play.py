@@ -29,7 +29,8 @@ from . import cardmap
 from .adapter import (TYPE_TO_CARD, Clock, TowerTracker, decode, legal_mask,
                       playable_slots, view_from_state)
 from .device import PlayCheck, deploy, tune_detector, use_fresh_screenshots
-from .perception import ElixirBook, HiddenAttacker, SideTracker
+from .fairplay import FairPlay
+from .perception import ElixirBook, EnemyElixir, HiddenAttacker, SideTracker
 from .towers import BadgeWatch
 from .towers import enemy_king as read_enemy_king
 
@@ -37,7 +38,9 @@ DISPLAY_W, DISPLAY_H = 720, 1280  # Build-A-Bot's coordinate space
 # The search settings for real games: the opponent answers our pushes in the look-ahead
 # (v4.2), and the first 3 banked elixir are worth double (v4.5; 22-18 and 21-19 at half
 # strength in simulator A/B tests, and it fixes a recorded elixir dump).
-REAL_GAME_SEARCH = {"reply": "defender", "reserve": 1.0}
+# reserve_elixir 4: keep enough back for any 4-elixir answer (recorded 2026-10-13: the bot
+# spent down to 0-2 elixir in 307 of 426 decisions; simulator A/B against 3: 23-17)
+REAL_GAME_SEARCH = {"reply": "defender", "reserve": 1.0, "reserve_elixir": 4.0}
 PRO_PRIOR = Path(__file__).resolve().parents[2] / "models" / "pro_prior.pt"
 
 
@@ -62,7 +65,10 @@ def parse_deck(text: str) -> list[str]:
         (deck if b else bad).append(b or n.strip())
     if bad:
         raise SystemExit(f"unknown card name(s): {bad}. Use the names the game shows, e.g. "
-                         f"'Mini PEKKA', 'The Log', 'Goblin Hut'.")
+                         f"'Mini PEKKA', 'The Log', 'Goblin Hut'. The screen reader knows "
+                         f"110 cards; the newest ones (Goblin Machine, Goblinstein, Boss "
+                         f"Bandit, Berserker, Rune Giant, Spirit Empress, ...) are not among "
+                         f"them yet, so a deck cannot include them.")
     if len(deck) != 8 or len(set(deck)) != 8:
         raise SystemExit(f"--deck needs 8 different cards, got {len(set(deck))}: {deck}")
     return deck
@@ -138,20 +144,33 @@ def _use_current_card_art():
     """Some of Build-A-Bot's card pictures are older art than the live game shows (the
     Goblin Hut is now a wooden hut with a goblin in it), and its card reader then mistakes
     that card for another. Pictures in crownzero/real/card_art, taken from the live game,
-    replace those."""
+    replace those. A card with an evolution also matches its evolved picture (shown in
+    hand once the evolution is charged): each card is compared with all its pictures and
+    the closest counts."""
     import clashroyalebuildabot.detectors.card_detector as cd
     from PIL import Image
 
     if getattr(cd.CardDetector, "_crownzero_art", False):
         return
 
+    def pictures(name):
+        ours = CARD_ART / f"{name}.jpg"
+        base = ours if ours.exists() else Path(cd.IMAGES_DIR) / "cards" / f"{name}.jpg"
+        out = [base]
+        for extra in (CARD_ART / f"{name}_ev1.jpg", Path(cd.IMAGES_DIR) / "cards" / f"{name}_ev1.jpg"):
+            if extra.exists():
+                out.append(extra)
+                break
+        return out
+
     def _calculate_card_hashes(self):
+        pics = [pictures(card.name) for card in self.cards]
+        k = max(len(p) for p in pics)
         n = len(self.cards)
-        hashes = np.zeros((n, 3, self.hash_size * self.hash_size, self.HAND_SIZE), np.float32)
-        for i, card in enumerate(self.cards):
-            ours = CARD_ART / f"{card.name}.jpg"
-            path = ours if ours.exists() else Path(cd.IMAGES_DIR) / "cards" / f"{card.name}.jpg"
-            multi = self._calculate_multi_hash(Image.open(path))
+        hashes = np.zeros((n, 3 * k, self.hash_size * self.hash_size, self.HAND_SIZE), np.float32)
+        for i, paths in enumerate(pics):
+            paths = paths + [paths[0]] * (k - len(paths))  # pad with the base picture
+            multi = np.concatenate([self._calculate_multi_hash(Image.open(q)) for q in paths])
             hashes[i] = np.tile(np.expand_dims(multi, axis=2), (1, 1, self.HAND_SIZE))
         return hashes
 
@@ -193,6 +212,8 @@ def make_bot_class(capture: str = "screencap", tune: bool = True):
             self.badges = BadgeWatch()
             self.elixir_book = ElixirBook()
             self.sides = SideTracker()
+            self.fair = FairPlay()
+            self.enemy_elixir = EnemyElixir()
             self.hidden = HiddenAttacker()
             self.recent_plays = []  # (time, tile x, tile y, unit names) of our last plays
             self.units_of = {cardmap.sim_name(a.CARD.name): {u.name for u in a.CARD.units}
@@ -246,7 +267,16 @@ def make_bot_class(capture: str = "screencap", tune: bool = True):
                 self.badges.reset()
                 self.sides.reset()
                 self.hidden.reset()
+                self.enemy_elixir.reset()
             self.clock.update(in_game)
+            if self.last_image is not None:
+                was = self.fair.sit_out
+                if self.fair.update(self.last_image, in_game) and not was:
+                    logger.warning(
+                        "'Searching for opponent': the next battle is against a real player. "
+                        "CrownZero only plays Training Camp and friendly battles (Supercell's "
+                        "terms ban bots, and a bot on the ladder takes trophies from people), "
+                        "so it will sit this battle out.")
             if (self.recorder is not None and new_state is not None
                     and new_state.screen == Screens.UNKNOWN):
                 self.recorder.frame(self.last_image, "unknown")  # to see what it misread
@@ -254,6 +284,9 @@ def make_bot_class(capture: str = "screencap", tune: bool = True):
 
         def _handle_game_step(self, state):
             if state.screen != Screens.IN_GAME:  # e.g. the lobby: never tap there
+                time.sleep(0.5)
+                return
+            if self.fair.sit_out:  # a matchmade battle: see fairplay.py
                 time.sleep(0.5)
                 return
             self.clock.update(True)
@@ -264,6 +297,9 @@ def make_bot_class(capture: str = "screencap", tune: bool = True):
             ghosts = self.sides.ghosts()  # enemies the detector missed for a frame or two
             state = dataclasses.replace(state, allies=allies, enemies=enemies + ghosts)
             view = view_from_state(state, self.clock)
+            # counted and recorded, not yet used: on the seventh recording the count saw more
+            # plays than the opponent could afford (see perception.EnemyElixir)
+            enemy_elixir = self.enemy_elixir.update(view.clock * 180.0, enemies)
             raw = [view.towers[1], view.towers[2], view.towers[4], view.towers[5]]
             marks = None
             if self.last_image is not None:
@@ -278,7 +314,7 @@ def make_bot_class(capture: str = "screencap", tune: bool = True):
                 view.unit_names.append(name)
                 logger.info(f"tower under attack with nothing seen near it: assuming a {name} at ({x}, {y})")
             self._check_deck(state, view)
-            decision = dict(played=False)
+            decision = dict(played=False, enemy_elixir=round(enemy_elixir, 1))
             if ghosts:
                 decision["ghosts"] = [[g.unit.name, g.position.tile_x, g.position.tile_y]
                                       for g in ghosts]
@@ -328,6 +364,7 @@ def make_bot_class(capture: str = "screencap", tune: bool = True):
                                     decision["slot"], decision["card"])
             self.recent_plays.append((time.monotonic(), *decision["tile"],
                                       self.units_of.get(decision["card"], set())))
+            self.sides.own_play(decision["card"], *decision["tile"])
             if self.live is not None:
                 logger.info(f"play {self.plays}: {decision['card']} at tile "
                             f"{tuple(decision['tile'])} | searched in {decision['think_ms']} ms")

@@ -68,6 +68,7 @@ class View:
     hand_names: list = field(default_factory=lambda: [None] * HAND)
     next_name: str | None = None
     unit_names: list = field(default_factory=list)  # parallel to ``units``
+    enemy_elixir: float | None = None  # the opponent's elixir, estimated (None: unknown)
 
     def raw(self) -> np.ndarray:
         """The non-unit part as one float row (see RAW_* offsets)."""

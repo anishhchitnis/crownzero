@@ -34,11 +34,24 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v3 | Live search: rebuild the board seen on screen in the simulator, search it every move | 18-2 against v1; 20-0 against defend and patient |
 | v4 | Any deck, any card; current card art; tower bars smoothed; deck mismatch warning | Fixes the misread hand found in real-game recordings |
 | v4.1 | Ignores arena decorations read as troops; our own deploying troops stay ours | Fixes the phantom defence found in the next recording |
+| v4.7 | Our own spawners' units stay ours; the pro prior only advises card kinds it has data for, and no building goes on the back row; a reserve of 4 elixir; the opponent's elixir counted (recorded only); sits out matchmade battles | Replaying the seventh battle: plays answering only our own Skeletons 7 → 1, our Skeletons read as enemies 450 → 175 frames (the rest come from the Tombstone the game moved, which the building rule now prevents), no Tombstone opener. Simulator: reserve 4 vs 3, 23-17; elixir counting 15-25 (recorded, not used) |
 | v4.6 | Learns from top players' replays: a replay reader (both players' plays: card, cost, tile, and the board before, rebuilt in the simulator) and a placement prior trained on them; the search tries the prior's top tiles for each card and leans toward them | Simulator A/B against v4.5, 40 games each, random decks: 26-14 (crowns 37-25), and 24-16 with the prior's tiles as candidates only |
 | v4.5 | Tower check that works in any arena (learns each tower's badge); bars: median of three, never rising; a unit first seen on its owner's half keeps that side; enemies missed for a frame are remembered; the detector picks the fastest backend on the machine (CoreML on a Mac) | Fixes the four mistakes of the sixth recording (a 3-crown win in 82 s) |
 | v4.4 | Sees destroyed towers (level badge gone) and the enemy King Tower's health; plays into the pocket once a tower falls (simulator: 19-21, but 5-0 in 3-crown wins); one-frame bar dips ignored; lighter recording, shorter pause after plays | Fixes the destroyed tower read as 3% for 2 minutes in the fifth recording (a 3-crown win) |
 | v4.3 | Fresh screenshots, one-drag plays checked against the hand, detector on 2 cores; summoned units valued by their size; buildings keep their side | Fixes the 41% of plays that never happened in the fourth recording, and the Goblin Hut overvalued; 15-15 against v4.2 in a mirror match with that deck |
 | v4.2 | Memory across frames (elixir after a play, ally/enemy vote, attackers hidden behind a tower); the opponent defends inside the look-ahead | Fixes the four mistakes found in the third recording (below); in the simulator 40-40 against v4.1 and 6-14 against full-information search, same as v4.1 |
+
+### Seventh recording (v4.6 → v4.7): lost 1-2 in sudden death
+
+The recording opens on "Searching for opponent": a matchmade battle against a 931-trophy
+player, not Training Camp. All 30 plays happened; these are the mistakes, and what the
+battle's frames say caused them.
+
+| Mistake | Cause | Fix |
+|---|---|---|
+| 10 of 30 plays answered enemy Skeletons that were our own Tombstone's | The Tombstone was never detected, so nothing marked its Skeletons as ours; Skeletons carry no level tag, and the side classifier called them enemies all game. Skeletons it had once seen came back as "ghost" enemies too | A card we play that keeps making units (Tombstone, Huts, Goblin Cage, Graveyard, ...) is remembered for its lifetime: its units near it, or first seen deep in our half near it, are ours for good and never come back as ghosts. Replaying the battle, Skeletons near our Tombstones read as enemies: 201 frames → 3 |
+| Opened with a Tombstone behind the King Tower, which the game moved 3.6 tiles to the side | The placement prior had seen 11 building plays and sent buildings to the back row; the simulator allowed a building where it does not fit | The prior only advises kinds of card it has 30+ replay plays of (troops, spells); buildings never go on the King Tower's back row. Replayed: no Tombstone opener |
+| Spent its elixir the moment it reached 3 (307 of 426 decisions at 2 or less); Goblin Cage, Goblin Hut and Fireball sat in hand for 47, 38 and 24 decisions; both towers fell to pushes it had nothing left to answer | The reserve was a fixed 3 elixir, and the look-ahead rebuilt the opponent with 5 elixir every time, whatever they had saved up | The reserve kept back is 4 elixir, enough for any 4-elixir answer (simulator A/B against 3: 23-17). Elixir counting was tried too: the opponent starts with 5, gains 1 every 2.8 s (1.4 s in double elixir) and pays for every new unit on their side; the rebuild used that and the reserve grew with it. It lost 15-25 against the plain reserve of 4 in the simulator, so the count is only recorded (`enemy_elixir` in steps.jsonl), not used to decide |
 
 ### Learning from top players (v4.6)
 
@@ -173,6 +186,9 @@ Round robin of the five scripted bots that ship with RoyaleGym (40 games per pai
   with a generic hand, not the real opponent's cards.
 - The screen reader misses small units such as skeletons and can't see hidden buildings.
 - Card and tower levels are the simulator's, not the account's.
+- Cards: the screen reader knows 110 of the game's ~127 cards (not the newest: Goblin
+  Machine, Goblinstein, Boss Bandit, Rune Giant, ...). Evolutions are played as the normal
+  card, and champion / hero abilities are never used.
 - The placement prior has seen 225 pro plays; it needs thousands to say more than "where
   this kind of card usually goes". Some cards are still unnamed and a few tiles are read a
   tile or two off.
@@ -216,4 +232,7 @@ results/                     raw per-game results (JSON lines)
 ## Fair play
 
 Supercell's terms ban automating the game. Use Training Camp or friendly battles on a
-throwaway account only.
+throwaway account only. The bot enforces the ladder part: every battle against a stranger
+(Trophy Road, ranked, 2v2 with a random team) starts with the "Searching for opponent"
+screen, and when the bot sees it, it sits that battle out (`crownzero/real/fairplay.py`).
+Training Camp and friendly battles never show that screen.

@@ -160,3 +160,54 @@ def test_enemy_archers_arriving_where_ours_fell_are_enemies_quickly():
         allies, enemies = tr.update([], [det("archer", 3, y)])
         outs.append(len(enemies))
     assert outs[1:] == [1, 1, 1]  # at most the first frame is wrong
+
+
+def test_enemy_elixir_counts_plays_once_and_regenerates():
+    from types import SimpleNamespace as NS
+
+    from crownzero.real.perception import EnemyElixir
+
+    def det(name, x, y):
+        return NS(unit=NS(name=name), position=NS(tile_x=x, tile_y=y))
+
+    ee = EnemyElixir()
+    assert ee.update(0.0, []) == 5.0
+    assert abs(ee.update(2.8, []) - 6.0) < 1e-6          # one elixir per 2.8 s
+    # they play Archers (3): two units, one play
+    v = ee.update(3.0, [det("archer", 5, 25), det("archer", 6, 25)])
+    assert abs(v - (6.0 + 0.2 / 2.8 - 3)) < 1e-6
+    # the same Archers walking, read once as something else, lost for a frame: no new play
+    for k, name in enumerate(["archer", "musketeer", None, "archer"]):
+        dets = [] if name is None else [det(name, 5, 24 - k), det("archer", 6, 24 - k)]
+        v2 = ee.update(3.4 + 0.4 * k, dets)
+    assert ee.spent == 3.0
+    # never above 10, double speed after two minutes
+    assert ee.update(100.0, []) == 10.0
+    ee.value = 0.0
+    ee.last_t = 130.0
+    assert abs(ee.update(131.4, []) - 1.0) < 1e-6
+
+
+def test_enemy_elixir_counts_their_plays():
+    from types import SimpleNamespace as NS
+
+    from crownzero.real.perception import EnemyElixir
+
+    def det(name, x, y):
+        return NS(unit=NS(name=name), position=NS(tile_x=x, tile_y=y))
+
+    ee = EnemyElixir()
+    assert ee.update(0.0, []) == 5.0
+    assert abs(ee.update(2.8, []) - 6.0) < 1e-6          # one elixir per 2.8 s
+    giant = det("giant", 3, 25)
+    assert abs(ee.update(3.0, [giant]) - (6.0 + 0.2 / 2.8 - 5.0)) < 1e-6  # a Giant: 5 elixir
+    ee.update(3.5, [giant])                              # the same Giant: no new play
+    assert ee.value < 1.5
+    archers = [det("archer", 8, 20), det("archer", 9, 20)]
+    for t in (4.0, 4.5):
+        v = ee.update(t, archers)
+    assert v == 0.0 or v < 0.5                           # 2 x 1.5 elixir, never below 0
+    assert ee.update(200.0, []) == 10.0                  # never above 10
+    # our own half: units arriving there are not new plays of theirs
+    ee.update(201.0, [det("knight", 5, 10)])
+    assert ee.value == 10.0

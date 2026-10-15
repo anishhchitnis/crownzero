@@ -31,6 +31,7 @@ TROOP_SPOTS = [(3, 10), (14, 10), (8, 8), (9, 8), (3, 14), (14, 14), (8, 1), (9,
 BUILDING_SPOTS = [(8, 9), (9, 9), (8, 11), (9, 11)]
 POCKET_SPOTS = ([(3, 20), (5, 19)], [(14, 20), (12, 19)])  # left, right lane
 SNAP_LIMIT = 3.0  # tiles: an anchor further than this from any legal cell is dropped
+BUILDING_MIN_ROW = 2  # own-frame rows below this hold no building
 PRIOR_FLOOR = 5.0  # log-probability units: below this, the prior's mark-down stops growing
 
 
@@ -56,7 +57,7 @@ class SearchBot:
                  defend_horizon_ticks: int | None = None, spawn_scaling: bool = True,
                  pocket_spots: bool = True, reserve: float = 0.0,
                  reserve_elixir: float = 3.0, prior=None, prior_weight: float = 0.3,
-                 prior_k: int = 3) -> None:
+                 prior_k: int = 3, reserve_per_enemy: float = 0.0) -> None:
         """``opponent``: an object with ``reply(state, team, mask) -> action``. When given,
         every rollout lets the opponent answer ``reply_ticks`` after our move (a two-ply
         search) instead of assuming it stands still.
@@ -80,6 +81,10 @@ class SearchBot:
         # enemy Mini P.E.K.K.A then hit our tower with nothing to answer it.
         self.reserve = reserve
         self.reserve_elixir = reserve_elixir
+        # ... and more of them when the opponent has saved up for a push: the elixir kept
+        # back is reserve_elixir + reserve_per_enemy * (their elixir - 5), within 1-6
+        self.reserve_per_enemy = reserve_per_enemy
+        self._reserve_cap = reserve_elixir
         self.base_horizon = horizon_ticks
         # Look further ahead when enemy troops are on our side: a Giant at the bridge needs
         # ~10 s to reach a tower, and a 6 s look-ahead sees no danger in it (recorded
@@ -106,6 +111,11 @@ class SearchBot:
             if self.opponent is not None and getattr(self.opponent, "cards", None) is None:
                 self.opponent.bind(engine)
         state = env.battle_state
+        self._reserve_cap = self.reserve_elixir
+        if self.reserve_per_enemy:
+            theirs = state.players[1 - team].elixir_milli / 1000
+            self._reserve_cap = float(np.clip(
+                self.reserve_elixir + self.reserve_per_enemy * (theirs - 5.0), 1.0, 6.0))
         self.horizon = self.base_horizon
         if self.defend_horizon != self.base_horizon:
             for ent in state.entities:
@@ -171,6 +181,8 @@ class SearchBot:
             if card is None or not planes[slot].any():
                 continue
             logp = self.prior.placement(board, card.name, me.elixir_milli / 1000, clock)
+            if logp is None:  # a kind of card the prior has not seen enough of
+                continue
             logp = np.where(planes[slot] > 0, logp, -np.inf)
             if np.isfinite(logp).any():
                 maps[slot] = logp
@@ -248,6 +260,12 @@ class SearchBot:
                     anchors = spell_spots + tower_spots
             elif kind == "BUILDING":
                 anchors = BUILDING_SPOTS + [(x, max(y - 4, 2)) for x, y in reactive[::2]]
+                # a building on the King Tower's back row does not fit there, and the game
+                # puts it somewhere else (recorded: a Tombstone 3.6 tiles from its tile)
+                plane = plane.copy()
+                plane[:BUILDING_MIN_ROW] = 0
+                if not plane.any():
+                    continue
             else:
                 anchors = TROOP_SPOTS + reactive + pockets
             if slot in self._prior_maps:  # where a pro would put this card
@@ -282,7 +300,7 @@ class SearchBot:
             princesses = sum(hp / max(mx, 1) for hp, mx in zip(p.tower_hp[1:], p.tower_max_hp[1:]))
             v += sign * (w.king * king + w.princess * princesses + w.crown * p.crowns)
         e = s.players[team].elixir_milli / 1000
-        v += w.elixir * e + self.reserve * min(e, self.reserve_elixir)  # own elixir only
+        v += w.elixir * e + self.reserve * min(e, self._reserve_cap)  # own elixir only
         if s.game_over:
             if s.winner == team:
                 v += w.win

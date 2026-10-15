@@ -119,6 +119,8 @@ def main():
     bot.elixir_book.played = lambda *a, **k: None
     check_played = bot.play_check.played  # likewise for checking that plays happened
     bot.play_check.played = lambda *a, **k: None
+    own_play = bot.sides.own_play  # and for which spawned units are ours
+    bot.sides.own_play = lambda *a, **k: None
     t0 = rows[0]["t"]
     changed = 0
     for r, f in frames:
@@ -135,6 +137,7 @@ def main():
             book_played(r["view"]["elixir"], cardmap.SIM_COST.get(old["card"], 0),
                         old.get("slot"), old.get("card"))
             check_played(old["slot"], old["card"], "tap")
+            own_play(old["card"], *old["tile"])
         o = f"{old.get('card')} {old.get('tile')}" if old.get("played") else "wait"
         n = f"{new.get('card')} {new.get('tile')}" if new.get("played") else "wait"
         if o != n:

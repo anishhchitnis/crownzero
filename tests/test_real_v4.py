@@ -120,3 +120,31 @@ def test_live_search_plays_cards_outside_the_18():
     a = live.decide(v, allowed_slots=[2])
     assert a == 0 or (a - 1) // (32 * 18) == 2
     assert np.isfinite(a)
+
+
+def test_evolved_card_pictures_are_read_as_the_card():
+    import os
+    import sys
+
+    import pytest
+    sys.path.insert(0, os.environ.get("CRBAB_PATH", os.path.expanduser("~/vendor/cr_buildabot")))
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("clashroyalebuildabot")
+    from PIL import Image
+
+    from crownzero.real.play import _use_current_card_art
+    _use_current_card_art()
+    from clashroyalebuildabot.constants import CARD_CONFIG, IMAGES_DIR
+    from clashroyalebuildabot.detectors.card_detector import CardDetector
+    from clashroyalebuildabot.namespaces.cards import Cards
+
+    deck = [Cards.KNIGHT, Cards.ARCHERS, Cards.GIANT, Cards.FIREBALL, Cards.MINIONS,
+            Cards.MUSKETEER, Cards.CANNON, Cards.ZAP]
+    frame = Image.new("RGB", (368, 652), (40, 70, 120))
+    shown = ["zap", "knight_ev1", "archers_ev1", "giant", "fireball"]  # next + 4 slots
+    for slot, name in enumerate(shown):
+        x0, y0, x1, y1 = CARD_CONFIG[slot]
+        frame.paste(Image.open(f"{IMAGES_DIR}/cards/{name}.jpg").resize((x1 - x0, y1 - y0)),
+                    (x0, y0))
+    cards, _ = CardDetector(list(deck)).run(frame)
+    assert [c.name for c in cards] == ["zap", "knight", "archers", "giant", "fireball"]

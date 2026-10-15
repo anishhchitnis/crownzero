@@ -6,7 +6,9 @@ to an Android emulator over ADB, reads each screenshot (units, hand, elixir, tow
 and taps the screen. CrownZero replaces only the decision-making.
 
 > **Fair play.** Supercell's terms ban automating the game, and accounts can be banned.
-> Use **Training Camp** or friendly battles on a **throwaway account** only. Never ladder.
+> Use **Training Camp** or friendly battles on a **throwaway account** only. Never ladder:
+> the bot sits out any battle that starts with "Searching for opponent" (Trophy Road,
+> ranked, 2v2 with a random team). Training Camp and friendly battles never show it.
 
 The screen reader expects a **720 x 1280 portrait** screen at **240 dpi**, in **English**.
 
@@ -69,6 +71,10 @@ names the game shows, separated by commas. Any cards work with the search brain:
 ```bash
 --deck "Giant,Mini PEKKA,Fireball,Archers,Goblin Hut,Minions,Musketeer,Knight"
 ```
+
+Any of the 110 cards Build-A-Bot knows; the newest cards (Goblin Machine, Goblinstein,
+Boss Bandit, Berserker, Rune Giant, Spirit Empress, ...) are refused because the screen
+reader cannot see them. Champions are played as plain troops (no abilities).
 
 This matters more than anything else. The screen reader can only recognise the cards it
 is told about: with the wrong deck it misreads your hand and even takes your own troops
