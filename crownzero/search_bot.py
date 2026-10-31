@@ -22,7 +22,7 @@ import time
 import numpy as np
 from royalegym import EntityKind
 
-from .board import (NOOP, NX, NY, PRINCESS_TOWER, RIVER_Y, action_index, card_table, is_tower,
+from .board import (HAND, NOOP, NX, NY, PRINCESS_TOWER, RIVER_Y, action_index, card_table, is_tower,
                     own_tile)
 
 # Spots for troops, own-frame tile (x, y). Princess towers sit at x 3.5 / 14.5, y 6.5;
@@ -57,7 +57,8 @@ class SearchBot:
                  defend_horizon_ticks: int | None = None, spawn_scaling: bool = True,
                  pocket_spots: bool = True, reserve: float = 0.0,
                  reserve_elixir: float = 3.0, prior=None, prior_weight: float = 0.3,
-                 prior_k: int = 3, reserve_per_enemy: float = 0.0) -> None:
+                 prior_k: int = 3, reserve_per_enemy: float = 0.0,
+                 abilities: bool = True) -> None:
         """``opponent``: an object with ``reply(state, team, mask) -> action``. When given,
         every rollout lets the opponent answer ``reply_ticks`` after our move (a two-ply
         search) instead of assuming it stands still.
@@ -68,6 +69,7 @@ class SearchBot:
         of log-probability it falls below the card's best tile (at most PRIOR_FLOOR
         units): the simulator still decides, the prior breaks near-ties toward where
         pros play."""
+        self.abilities = abilities  # try hero / champion ability buttons as candidates
         self.prior = prior
         self.prior_weight = prior_weight
         self.prior_k = prior_k
@@ -102,7 +104,8 @@ class SearchBot:
     # ---------------------------------------------------------------- deciding
     def act(self, env, team: int, obs, mask, rng) -> int:
         planes = np.asarray(obs["mask_planes"])
-        if not planes.any():
+        buttons = self._buttons(env, mask) if self.abilities else []
+        if not planes.any() and not buttons:
             return NOOP
         engine = env.engine
         if self.cards is None:
@@ -123,7 +126,7 @@ class SearchBot:
                     if own_tile(self.arena, team, ent.x, ent.y)[1] < 16:
                         self.horizon = self.defend_horizon
                         break
-        cands = self._candidates(state, team, planes)
+        cands = self._candidates(state, team, planes) + buttons
         if not cands:
             return NOOP
 
@@ -151,6 +154,18 @@ class SearchBot:
         self.rollouts += len(cands) + 1
         self.think_s += time.perf_counter() - t0
         return best_action
+
+    @staticmethod
+    def _buttons(env, mask) -> list[int]:
+        """Ability-button actions the mask allows now (a hero's one charge, a champion's
+        ability off cooldown). They come after the tile actions; each is tried like any
+        other play: press it, simulate ahead, score the board."""
+        parser = env.action_parser
+        n_tile = getattr(parser, "n_tile_actions", None)
+        if not getattr(parser, "n_buttons", 0) or n_tile is None:
+            return []
+        m = np.asarray(mask)
+        return [int(a) for a in range(n_tile, len(m)) if m[a]]
 
     def _rollout(self, env, engine, cmd, team: int) -> float:
         first = [cmd] if cmd is not None else []
@@ -189,8 +204,8 @@ class SearchBot:
         return maps
 
     def _prior_bonus(self, action: int) -> float:
-        if not self._prior_maps or action == NOOP:
-            return 0.0
+        if not self._prior_maps or action == NOOP or action > HAND * NX * NY:
+            return 0.0  # no-op, or an ability button: the prior only places cards
         slot, cell = divmod(action - 1, NX * NY)
         y, x = divmod(cell, NX)
         logp = self._prior_maps.get(slot)

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from royalegym import ClashParallelEnv, DefaultStateMutator, RustEngine, Winner, ladder
+from royalegym.action import GridActionParser
 from royalegym.evaluate import wilson
 
 AGENTS = ("blue", "red")
@@ -84,15 +85,44 @@ def decks_for(deck_spec, seed: int):
         from .decks import pick_deck
         rng = np.random.default_rng(10_000 + seed)
         return [pick_deck(rng), pick_deck(rng)]
+    if deck_spec == "full":  # the whole card pool: evolutions, heroes, champions
+        from .fulldecks import Pool
+        if "pool" not in _ENV:
+            _ENV["pool"] = Pool(make_env().engine)
+        rng = np.random.default_rng(20_000 + seed)
+        return [_ENV["pool"].pick(rng), _ENV["pool"].pick(rng)]
+    if deck_spec == "special":  # META decks with a hero or a champion: abilities matter
+        from .fulldecks import META, Pool
+        if "pool" not in _ENV:
+            _ENV["pool"] = Pool(make_env().engine)
+        pool = _ENV["pool"]
+        special = [d for d in META.values()
+                   if d.heroes or any(c in pool.champions for c in d.cards)]
+        rng = np.random.default_rng(30_000 + seed)
+        return [special[int(rng.integers(len(special)))] for _ in range(2)]
+    from .fulldecks import FullDeck
+    if isinstance(deck_spec, FullDeck):
+        return [deck_spec, deck_spec]
     return [list(deck_spec), list(deck_spec)]
 
 
 def make_env(deck_names=DEFAULT_DECK) -> ClashParallelEnv:
+    """The shared env, set up for these decks. ``deck_names``: 8 names (a mirror match), or
+    [blue, red] where each is 8 names or a ``FullDeck`` (with evolution / hero forms).
+    The action space has the ability buttons after the tile actions, so heroes and
+    champions can use their abilities."""
+    from .fulldecks import FullDeck, as_setup
+
     if "env" not in _ENV:
-        _ENV["env"] = ClashParallelEnv(engine=RustEngine())
+        _ENV["env"] = ClashParallelEnv(engine=RustEngine(),
+                                       action_parser=GridActionParser(ability_buttons=True))
     env = _ENV["env"]
-    decks = deck_names if isinstance(deck_names, list) else [list(deck_names)] * 2
-    env.state_mutator = DefaultStateMutator(decks=decks)
+    if isinstance(deck_names, FullDeck):
+        deck_names = [deck_names, deck_names]
+    pair = deck_names if isinstance(deck_names, list) else [list(deck_names)] * 2
+    decks, forms = as_setup(pair)
+    env.state_mutator = DefaultStateMutator(
+        decks=decks, forms=forms if any(any(f) for f in forms) else None)
     return env
 
 
@@ -188,7 +218,8 @@ class Match:
 def match(spec_a, spec_b, games: int = 40, seed: int = 0, deck=DEFAULT_DECK,
           workers: int | None = None, name_a: str | None = None, name_b: str | None = None):
     per_seat = (games + 1) // 2
-    deck = deck if deck == "random" else tuple(deck)
+    from .fulldecks import FullDeck
+    deck = deck if deck in ("random", "full", "special") or isinstance(deck, FullDeck) else tuple(deck)
     jobs = [(spec_a, spec_b, seed + g, a_is_blue, deck)
             for a_is_blue in (True, False) for g in range(per_seat)]
     workers = workers or mp.cpu_count()
