@@ -71,6 +71,7 @@ def main():
     ap.add_argument("--val", default="images/val", help="folder of validation images")
     ap.add_argument("--name", default="crownzero_units")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--lr0", type=float, default=0.001)
     a = ap.parse_args()
 
     from ultralytics import YOLO
@@ -81,6 +82,10 @@ def main():
     print(f"training on: {device}", flush=True)
     model.train(data=str(write_yaml(a.dataset, a.val)), epochs=a.epochs, imgsz=a.imgsz,
                 batch=a.batch, device=device, name=a.name, fliplr=0.0,
+                # Set by hand: "auto" picks AdamW at 0.002 * 5 / (4 + classes), which with
+                # 276 classes is 3.6e-5, far too small for a short run (recorded 2026-10-31:
+                # one epoch reached 3% mAP50 on the real frames).
+                optimizer="AdamW", lr0=a.lr0, warmup_epochs=1.0,
                 mosaic=0.5, workers=a.workers, project=str(a.dataset / "runs"), exist_ok=True)
     best = a.dataset / "runs" / a.name / "weights" / "best.pt"
     YOLO(str(best)).export(format="onnx", imgsz=a.imgsz, nms=True)
