@@ -24,14 +24,40 @@ def write_yaml(ds: Path, val: str = "images/val") -> Path:
     return y
 
 
+MPS_PROBE = ("import torch; m = torch.nn.Conv2d(3, 8, 3).to('mps'); "
+             "x = torch.randn(2, 3, 64, 64, device='mps'); m(x).sum().backward(); print('ok')")
+
+
+def mps_works() -> bool:
+    """Can this Mac train on its GPU? Checked in a separate process: on macOS 14 recent
+    PyTorch builds report MPS as available, then abort the whole program at the first
+    convolution ("-[MPSNDArray initWithBuffer:offset:descriptor:]: unrecognized selector",
+    recorded 2026-10-31 on an M2 MacBook Air), which no try/except can catch."""
+    import subprocess
+    import sys
+
+    try:
+        r = subprocess.run([sys.executable, "-c", MPS_PROBE], capture_output=True, text=True,
+                           timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0 and "ok" in r.stdout
+
+
 def pick_device(requested: str | None) -> str:
     if requested:
         return requested
     import torch
 
+    if torch.cuda.is_available():
+        return "0"
     if torch.backends.mps.is_available():
-        return "mps"
-    return "0" if torch.cuda.is_available() else "cpu"
+        if mps_works():
+            return "mps"
+        print("The Mac's GPU (MPS) cannot train with this PyTorch on this macOS version: "
+              "training on the CPU instead (slower). macOS 15 or later lets it use the GPU.",
+              flush=True)
+    return "cpu"
 
 
 def main():
@@ -51,8 +77,10 @@ def main():
 
     model = YOLO(a.model)
     # No left-right flips: a unit's side is read partly from which way it faces.
+    device = pick_device(a.device)
+    print(f"training on: {device}", flush=True)
     model.train(data=str(write_yaml(a.dataset, a.val)), epochs=a.epochs, imgsz=a.imgsz,
-                batch=a.batch, device=pick_device(a.device), name=a.name, fliplr=0.0,
+                batch=a.batch, device=device, name=a.name, fliplr=0.0,
                 mosaic=0.5, workers=a.workers, project=str(a.dataset / "runs"), exist_ok=True)
     best = a.dataset / "runs" / a.name / "weights" / "best.pt"
     YOLO(str(best)).export(format="onnx", imgsz=a.imgsz, nms=True)

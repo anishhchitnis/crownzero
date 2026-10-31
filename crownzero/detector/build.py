@@ -70,6 +70,8 @@ def main():
     ap.add_argument("--model", default=None)
     ap.add_argument("--device", default=None)
     ap.add_argument("--no-train", action="store_true", help="stop after building the dataset")
+    ap.add_argument("--skip-data", action="store_true",
+                    help="reuse the dataset a previous run built; only train")
     ap.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[2] / "models")
     a = ap.parse_args()
     root = a.root.expanduser()
@@ -78,6 +80,10 @@ def main():
     epochs = a.epochs or (15 if a.quick else 40)
     model = a.model or ("yolov8n.pt" if a.quick else "yolov8s.pt")
 
+    ds = root / "dataset"
+    if a.skip_data and (ds / "classes.json").exists():
+        classes = json.loads((ds / "classes.json").read_text())
+        return _train(a, root, ds, classes, model, epochs)
     print("1/4 downloading sprites and real frames ...", flush=True)
     data = download(root)
     sprites = data / "images" / "segment"
@@ -95,7 +101,6 @@ def main():
     print(f"   {len(arenas)} arenas", flush=True)
 
     print(f"3/4 {n} generated images + real frames ...", flush=True)
-    ds = root / "dataset"
     if ds.exists():
         shutil.rmtree(ds)
     gen = Generator(SpriteBank(sprites), arenas, seed=0, p_arena=0.5 if arenas else 0.0)
@@ -122,11 +127,21 @@ def main():
     if a.no_train:
         print(f"dataset ready: {ds}")
         return
-    print(f"4/4 training {model}, {epochs} epochs ...", flush=True)
+    _train(a, root, ds, classes, model, epochs)
+
+
+def _train(a, root, ds, classes, model, epochs):
+    print(f"4/4 training {model} ...", flush=True)
+    from .train import pick_device
+
+    device = pick_device(a.device)
+    imgsz = 640
+    if device == "cpu" and a.quick:  # a smaller input keeps a CPU run to a few hours
+        imgsz, epochs = 480, min(epochs, 12)
+    print(f"   on {device}, images at {imgsz} px, {epochs} epochs", flush=True)
     cmd = [sys.executable, "-m", "crownzero.detector.train", str(ds), "--model", model,
-           "--epochs", str(epochs), "--val", "images/val_real"]
-    if a.device:
-        cmd += ["--device", a.device]
+           "--epochs", str(epochs), "--val", "images/val_real", "--device", device,
+           "--imgsz", str(imgsz)]
     subprocess.run(cmd, check=True)
     best = ds / "runs" / "crownzero_units" / "weights" / "best.onnx"
     a.out.mkdir(exist_ok=True)

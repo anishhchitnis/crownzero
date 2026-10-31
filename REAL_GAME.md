@@ -139,7 +139,10 @@ pip install -e ".[sim,detector]"
 python -m crownzero.detector.build ~/Downloads/cr_detector --recordings ~/Downloads/cr_recordings --quick
 ```
 
-`--quick` takes roughly 1-2 hours; without it, a night. It downloads about 700 MB of training
+`--quick` takes roughly 1-2 hours on the Mac's GPU; without it, a night. On macOS 14 the
+GPU cannot train with current PyTorch, so it trains on the CPU (a few hours with `--quick`);
+macOS 15 or later uses the GPU. A run that stopped during training can be restarted with
+`--skip-data` to reuse the images it already made. It downloads about 700 MB of training
 data, and writes `models/units_cz.onnx`. Then add to the play command:
 
 ```bash
