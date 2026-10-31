@@ -119,6 +119,13 @@ play 7: HogRider at tile (14, 14) | searched in 140 ms
 
 Add `--record ~/Downloads/cr_recordings` to save every frame with what the bot saw and did.
 
+Recording friendly battles with other people: add `--private` too. No player name is then
+written to disk: only mid-battle frames are kept, the strips where the game shows names are
+painted black before a frame is saved, the first 3 and last 4 seconds of each battle are
+dropped (the names sliding in, "Winner!"), and lobby, "VS" and results screens are never
+saved. The bot itself still sees the whole screen. The blacked-out boxes are a best guess at
+the layout, so open a few frames and check before sharing a recording.
+
 `Ctrl+C` stops it.
 
 ## Troubleshooting

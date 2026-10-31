@@ -262,6 +262,8 @@ def make_bot_class(capture: str = "screencap", tune: bool = True):
             in_game = new_state is not None and new_state.screen == Screens.IN_GAME
             if not in_game and self.clock.start is not None:  # the battle ended
                 logger.info(f"battle over: {self.play_check.summary()}")
+                if self.recorder is not None:
+                    self.recorder.battle_over()
                 self.play_check = PlayCheck()
                 self.towers.reset()
                 self.badges.reset()
@@ -458,12 +460,18 @@ def main():
                          "Build-A-Bot's video stream (can fall seconds behind)")
     ap.add_argument("--record", default=None, metavar="DIR",
                     help="save every frame, what was detected and what the bot did, to DIR")
+    ap.add_argument("--private", action="store_true",
+                    help="with --record: never save a player's name. Only mid-battle frames "
+                         "are kept, the name strips are blacked out, the first and last "
+                         "seconds of each battle are dropped")
     ap.add_argument("--prior", default="auto", metavar="PATH|auto|none",
                     help="placement prior learnt from pro replays (search brain): auto uses "
                          "models/pro_prior.pt if present; none turns it off")
     args = ap.parse_args()
 
     deck = parse_deck(args.deck)
+    if args.private and not args.record:
+        logger.warning("--private only changes what --record saves; nothing is being recorded")
     if args.brain == "network":
         outside = [c for c in deck if cardmap.sim_name(c) not in CARD_TYPES]
         if outside:
@@ -486,7 +494,9 @@ def main():
                                               opponent_model=args.opponent_model,
                                               prior=args.prior,
                                               input=args.input, capture=args.capture,
-                                              play_threshold=args.play_threshold))
+                                              play_threshold=args.play_threshold,
+                                              private=args.private),
+                            private=args.private)
         logger.info(f"recording to {recorder.dir}")
     live = None
     if args.brain == "search":

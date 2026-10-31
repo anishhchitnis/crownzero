@@ -34,12 +34,56 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v3 | Live search: rebuild the board seen on screen in the simulator, search it every move | 18-2 against v1; 20-0 against defend and patient |
 | v4 | Any deck, any card; current card art; tower bars smoothed; deck mismatch warning | Fixes the misread hand found in real-game recordings |
 | v4.1 | Ignores arena decorations read as troops; our own deploying troops stay ours | Fixes the phantom defence found in the next recording |
+| v5 | The whole card pool: random legal decks from 125 ladder cards and 10 meta archetypes, with up to 2 evolutions, 1 hero and 1 champion (royalesim 0.1.42); the search presses hero and champion ability buttons; a snapshot the simulator cannot reload is skipped instead of crashing; `--private` recording; the live client's command delay and the screen's lag can be simulated | Full-pool decks: 49-1 against the 5 scripted bots (10 games each). Three real-game ideas, each 30 games under the client's delay: delay-aware look-ahead 13-17, tracking the opponent's cards 14-16, aiming spells ahead 16-14; none clear of chance, so all three stay off |
 | v4.7 | Our own spawners' units stay ours; the pro prior only advises card kinds it has data for, and no building goes on the back row; a reserve of 4 elixir; the opponent's elixir counted (recorded only); sits out matchmade battles | Replaying the seventh battle: plays answering only our own Skeletons 7 → 1, our Skeletons read as enemies 450 → 175 frames (the rest come from the Tombstone the game moved, which the building rule now prevents), no Tombstone opener. Simulator: reserve 4 vs 3, 23-17; elixir counting 15-25 (recorded, not used) |
 | v4.6 | Learns from top players' replays: a replay reader (both players' plays: card, cost, tile, and the board before, rebuilt in the simulator) and a placement prior trained on them; the search tries the prior's top tiles for each card and leans toward them | Simulator A/B against v4.5, 40 games each, random decks: 26-14 (crowns 37-25), and 24-16 with the prior's tiles as candidates only |
 | v4.5 | Tower check that works in any arena (learns each tower's badge); bars: median of three, never rising; a unit first seen on its owner's half keeps that side; enemies missed for a frame are remembered; the detector picks the fastest backend on the machine (CoreML on a Mac) | Fixes the four mistakes of the sixth recording (a 3-crown win in 82 s) |
 | v4.4 | Sees destroyed towers (level badge gone) and the enemy King Tower's health; plays into the pocket once a tower falls (simulator: 19-21, but 5-0 in 3-crown wins); one-frame bar dips ignored; lighter recording, shorter pause after plays | Fixes the destroyed tower read as 3% for 2 minutes in the fifth recording (a 3-crown win) |
 | v4.3 | Fresh screenshots, one-drag plays checked against the hand, detector on 2 cores; summoned units valued by their size; buildings keep their side | Fixes the 41% of plays that never happened in the fourth recording, and the Goblin Hut overvalued; 15-15 against v4.2 in a mirror match with that deck |
 | v4.2 | Memory across frames (elixir after a play, ally/enemy vote, attackers hidden behind a tower); the opponent defends inside the look-ahead | Fixes the four mistakes found in the third recording (below); in the simulator 40-40 against v4.1 and 6-14 against full-information search, same as v4.1 |
+
+### v5: the whole card pool, and what was tested for the real game
+
+**Simulator.** royalesim 0.1.42 plays evolutions (42 cards), hero forms (16) and champions
+(8), each hero and champion with an ability button. `crownzero/fulldecks.py` deals decks
+from the whole ladder pool (`Pool.random`: at least one spell, at most two buildings, average
+cost 2.6-4.6, up to 2 evolutions, 1 hero and 1 champion; the limits are `Rules`) or one of
+10 named archetypes (`META`). `arena.match(..., deck="full")` plays them; `deck="special"`
+plays only archetypes with a hero or champion. The search tries every ability button the
+mask allows as one more candidate.
+
+| Search bot, full-pool decks, both seats | Result |
+|---|---|
+| vs random | 10-0 |
+| vs first-affordable | 10-0 |
+| vs defend | 10-0 |
+| vs push | 10-0 |
+| vs patient | 9-1 |
+
+A test game with the Archer Queen archetype: 4 ability presses, a 3-0 win. The A/B of
+abilities on and off crashed on a simulator bug (below) before it finished, so the value
+of the button presses is not measured yet.
+
+**A simulator bug.** With two Hero Bowlers on the board, royalesim 0.1.42 sometimes saves
+a snapshot it then refuses to load ("snapshot entity tables are inconsistent"); a refused
+load leaves the battle untouched. The search now tries the load before searching and waits
+that decision out when it fails: in the game that crashed, 7 of 351 decisions.
+
+**Real-game ideas, tested in the simulator.** The live client runs a play 21-22 ticks
+(~1.1 s) after it is made, and the bot decides on a screenshot already a few hundred
+milliseconds old; the simulator can now do both (`arena.match(..., delay=21)`,
+`live-search` with `stale_steps`). Under them, the real-game brain against itself:
+
+| Change (off by default) | Result, 30 games | Script |
+|---|---|---|
+| The rebuilt battle has the same delay, and is run forward by the lag (`command_delay`, `lag_steps`) | 13-17 [27%, 61%] | scripts/exp_delay.py |
+| The look-ahead's opponent holds the cards it has been seen playing, in cycle order (`track_enemy_deck`) | 14-16 [30%, 64%] | scripts/exp_track.py |
+| Spells also aimed 1.5 and 3 tiles ahead of the densest enemies (`lead_spells`) | 16-14 [36%, 70%] | scripts/exp_lead.py |
+
+None is clear of chance, so none is on. 30 games can only show a large effect; these are
+small at best in the simulator, where the bot's problems are not what they are in the real
+game. The recordings showed the real game's problems are mostly the screen reader's, and the
+next recording (with `--private`) decides what to fix next.
 
 ### Seventh recording (v4.6 → v4.7): lost 1-2 in sudden death
 
@@ -187,8 +231,11 @@ Round robin of the five scripted bots that ship with RoyaleGym (40 games per pai
 - The screen reader misses small units such as skeletons and can't see hidden buildings.
 - Card and tower levels are the simulator's, not the account's.
 - Cards: the screen reader knows 110 of the game's ~127 cards (not the newest: Goblin
-  Machine, Goblinstein, Boss Bandit, Rune Giant, ...). Evolutions are played as the normal
-  card, and champion / hero abilities are never used.
+  Machine, Goblinstein, Boss Bandit, Rune Giant, ...). In the simulator the bot plays the
+  whole pool with evolutions, heroes and champion abilities (v5); in the real game the
+  screen reader cannot yet see evolved or hero cards, so evolutions are played as the normal
+  card and abilities are never pressed there.
+- The Hero Bowler snapshot bug (see v5) still needs reporting to RoyaleSim.
 - The placement prior has seen 225 pro plays; it needs thousands to say more than "where
   this kind of card usually goes". Some cards are still unnamed and a few tiles are read a
   tile or two off.
@@ -213,6 +260,9 @@ python -m venv .venv && .venv/bin/pip install -e ".[sim]"
 crownzero/search_bot.py      lookahead search (candidates, rollouts, scoring)
 crownzero/opponent_model.py  how the opponent answers inside the rollouts
 crownzero/live_search.py     rebuild a seen board in the simulator and search it
+crownzero/fulldecks.py       decks from the whole pool: evolutions, heroes, champions
+scripts/eval_full_pool.py    search vs the scripted bots on full-pool decks
+scripts/exp_delay.py, exp_track.py, exp_lead.py   the v5 real-game A/Bs
 crownzero/features.py        what the bot sees (the same from the simulator and the screen)
 crownzero/model.py, train.py the imitation network (v1/v2)
 crownzero/arena.py           parallel matches with seat-balanced Wilson intervals

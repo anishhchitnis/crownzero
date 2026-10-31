@@ -58,7 +58,7 @@ class SearchBot:
                  pocket_spots: bool = True, reserve: float = 0.0,
                  reserve_elixir: float = 3.0, prior=None, prior_weight: float = 0.3,
                  prior_k: int = 3, reserve_per_enemy: float = 0.0,
-                 abilities: bool = True) -> None:
+                 abilities: bool = True, lead_spells: bool = False) -> None:
         """``opponent``: an object with ``reply(state, team, mask) -> action``. When given,
         every rollout lets the opponent answer ``reply_ticks`` after our move (a two-ply
         search) instead of assuming it stands still.
@@ -70,6 +70,7 @@ class SearchBot:
         units): the simulator still decides, the prior breaks near-ties toward where
         pros play."""
         self.abilities = abilities  # try hero / champion ability buttons as candidates
+        self.lead_spells = lead_spells  # also aim spells ahead of moving enemy troops
         self.prior = prior
         self.prior_weight = prior_weight
         self.prior_k = prior_k
@@ -133,6 +134,16 @@ class SearchBot:
         t0 = time.perf_counter()
         setup_cards = getattr(engine, "_setup_cards", None)
         blob = engine.save_state()
+        # A snapshot the simulator cannot load back would leave the real battle in the
+        # state of the last rollout. royalesim 0.1.42 refuses some ("snapshot entity tables
+        # are inconsistent", seen with two Hero Bowlers on the board), and a refused load
+        # leaves the engine as it was; so try one before searching, and skip this decision
+        # when it fails.
+        try:
+            engine.load_state(blob)
+        except ValueError:
+            self.unsearchable = getattr(self, "unsearchable", 0) + 1
+            return self._fallback(state, team, cands)
         # Waiting first: the engine already sits at the saved point, so no load is needed.
         wait_value = self._rollout(env, engine, None, team)
         best_value = wait_value + self.margin
@@ -154,6 +165,10 @@ class SearchBot:
         self.rollouts += len(cands) + 1
         self.think_s += time.perf_counter() - t0
         return best_action
+
+    def _fallback(self, state, team: int, cands: list[int]) -> int:
+        """No search possible this decision: wait (0.5 s) and search again at the next one."""
+        return NOOP
 
     @staticmethod
     def _buttons(env, mask) -> list[int]:
@@ -241,6 +256,11 @@ class SearchBot:
             scored.append((dens, x, y))
         scored.sort(reverse=True)
         spell_spots = [(x, y) for _, x, y in scored[: self.max_spell_targets]]
+        if self.lead_spells:
+            # With the live client's ~1.1 s command delay, a spell lands where the troops
+            # WILL be: enemy troops walk toward our side (down, in our frame), so also aim a
+            # little and a lot ahead of them. The rollouts decide which one actually hits.
+            spell_spots += [(x, y - d) for x, y in spell_spots[:2] for d in (1.5, 3.0)]
         tower_spots = list(enemy_towers)
 
         # Pocket spots: once an enemy princess tower is down, troops may be placed on its side

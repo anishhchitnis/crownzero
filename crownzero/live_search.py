@@ -41,6 +41,46 @@ def proxy_card(t: int, flags: int) -> str:
     return "Knight"
 
 
+class EnemyDeck:
+    """The opponent's cards, as far as the screen has shown them, for the rebuilt battle.
+
+    A card is "seen" when a unit of it appears on the enemy side that was not there a
+    moment before; the order cards were seen in is the order they were played, which is
+    the cycle: the four played last are at the back of the queue, the rest are in hand.
+    Spells leave no unit and stay unknown; unknown slots are filled from a generic deck.
+    Before this, the rebuilt opponent always held Giant, Musketeer, Minions and Knight,
+    so the look-ahead's defender answered every push with them whatever the real deck."""
+
+    def __init__(self, known_names, generic):
+        self.known_names = set(known_names)
+        self.generic = list(generic)
+        self.played: list[str] = []  # most recent last, each card once
+        self._present: set = set()
+
+    def update(self, view: View) -> None:
+        names = view.unit_names if len(view.unit_names) == len(view.units) else []
+        now = {n for (own, *_), n in zip(view.units, names) if not own and n}
+        for n in sorted(now - self._present):
+            n = SPAWN_AS_CARD.get(n, n)
+            if n not in self.known_names:
+                continue
+            if n in self.played:
+                self.played.remove(n)
+            self.played.append(n)
+        self._present = now
+
+    def deck(self) -> list[str]:
+        seen = self.played[-8:]
+        recent = seen[-4:]  # just played: at the back of the queue, not in hand
+        hand_side = [c for c in seen if c not in recent]
+        fill = [c for c in self.generic if c not in seen]
+        cards = (hand_side + fill)[: 8 - len(recent)] + recent
+        return cards
+
+
+SPAWN_AS_CARD = {"Goblins": "GoblinBarrel"}  # rebuilt as Goblins; ignore: not a played card
+
+
 class _Fixed(StateMutator):
     setup: MatchSetup | None = None
 
@@ -55,8 +95,16 @@ class LiveSearch:
         self.by_name = {c.name: c.card_id for c in self.catalogue}
         self.arena = self.engine.arena()
         self.mutator = _Fixed()
-        self.env = ClashParallelEnv(engine=self.engine, state_mutator=self.mutator)
         kw = dict(search_kwargs or {})
+        # THE LIVE CLIENT'S COMMAND DELAY: a play lands 21-22 ticks (~1.1 s) after it is
+        # made (RoyaleSim's measurement). With ``command_delay`` the rebuilt battle has the
+        # same delay, so every rollout sees the board our play will actually meet.
+        # ``lag_steps``: the screenshot is already old when we decide (capture + detection,
+        # ~0.2-0.5 s), so the rebuilt board is run forward this many 0.5 s steps first.
+        self.delay = int(kw.pop("command_delay", 0))
+        self.lag_steps = int(kw.pop("lag_steps", 0))
+        self.env = ClashParallelEnv(engine=self.engine, state_mutator=self.mutator,
+                                    command_delay_ticks=self.delay or None)
         # rebuild the opponent with the elixir we counted for them (View.enemy_elixir)
         # rather than 5. Off: in the simulator, with the reserve below, it lost 15-25.
         self.use_enemy_elixir = kw.pop("count_enemy_elixir", False)
@@ -66,9 +114,13 @@ class LiveSearch:
         if isinstance(kw.get("prior"), (str, bytes)) or hasattr(kw.get("prior"), "__fspath__"):
             from .replays.prior import ProPrior  # a path to a trained placement prior
             kw["prior"] = ProPrior(kw["prior"])
+        track = kw.pop("track_enemy_deck", False)
         self.search = SearchBot(**kw)
         self.deck = list(deck)
         self.enemy_deck = [self.by_name[n] for n in CURATED["giant"]]
+        # follow the opponent's real cards instead of a fixed generic hand
+        self.tracker = (EnemyDeck(self.by_name, CURATED["giant"])
+                        if track else None)
         self.rng = np.random.default_rng(seed)
         # full tower health at the simulator's levels
         self.mutator.setup = MatchSetup(decks=[self._ids(self.deck), self.enemy_deck])
@@ -144,8 +196,17 @@ class LiveSearch:
     def decide(self, view: View, allowed_slots=None) -> int:
         """Best action id (own frame: slot x row x column, 0 = wait) for this View.
         ``allowed_slots``: only consider these hand slots (the ones lit on screen)."""
+        if self.tracker is not None:
+            self.tracker.update(view)
+            self.enemy_deck = self._ids(self.tracker.deck())
         self.mutator.setup = self.setup_for(view)
         obs, _ = self.env.reset(seed=int(self.rng.integers(1 << 30)))
+        for _ in range(self.lag_steps):  # the world moved on while we looked
+            if not self.env.agents:
+                break
+            obs, *_ = self.env.step({a: NOOP for a in self.env.agents})
+        if not self.env.agents:
+            return NOOP
         o = dict(obs["blue"])
         if allowed_slots is not None:
             planes = np.array(o["mask_planes"], copy=True)
@@ -170,6 +231,10 @@ class LiveSearchBot:
         # tell the rebuild the opponent's elixir (in the simulator we know it exactly; the
         # real game estimates it, perception.EnemyElixir)
         self.count_enemy = kw.get("count_enemy_elixir", False)
+        # SIMULATING THE SCREEN'S LAG: decide on the view from this many 0.5 s steps ago,
+        # as the real bot does on a screenshot that is already old (for testing lag_steps)
+        self.stale = int(kw.pop("stale_steps", 0))
+        self._views = []
         self.search_kwargs = kw or None
         self.live = None
         self.cards = None
@@ -191,5 +256,10 @@ class LiveSearchBot:
         view.elixir = float(np.floor(view.elixir + 1e-6))  # the screen shows whole elixir
         if self.count_enemy:
             view.enemy_elixir = st.players[1 - team].elixir_milli / 1000
+        if self.stale:
+            self._views.append(view)
+            if len(self._views) <= self.stale:
+                return NOOP
+            view = self._views.pop(0)
         a = self.live.decide(view)
         return a if mask[a] else NOOP

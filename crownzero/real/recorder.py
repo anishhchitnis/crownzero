@@ -3,7 +3,8 @@
     python -m crownzero.real.play --deck hog --record recordings
 
 For every decision it writes, into recordings/<date-time>/:
-  NNNNN.jpg      the frame the screen reader looked at (368 x 652, as Build-A-Bot sees it)
+  NNNNN.jpg      the frame the screen reader looked at (368 x 652, as Build-A-Bot sees it);
+                 with --private, only mid-battle frames, name strips blacked out (see below)
   NNNNN_ann.jpg  (only with annotate=True, e.g. from scripts/replay_battle.py) the same
                  frame, twice the size, with the tile grid, every detected unit (blue = ours,
                  red = theirs, with its tile), the hand, elixir and the decision drawn on top
@@ -42,9 +43,42 @@ def _num(n):
     return None if n is None else float(getattr(n, "number", n))
 
 
+# PRIVATE MODE (--private): no player name is ever written to disk.
+#  * Frames are held in memory for HOLD_S seconds before they are written. When a battle
+#    ends, every frame still held is thrown away, so the last seconds (the crowns, "Winner!"
+#    and the name on it) are never saved; frames from the first START_SKIP_S seconds of a
+#    battle (the names sliding in) are dropped too.
+#  * Screens outside a battle (lobby, "VS", results) are never saved.
+#  * In every saved frame the strips where the game draws the players' names are painted
+#    black first (NAME_BOXES, in 368 x 652 screenshot pixels). The bot reads the screen
+#    BEFORE this, so it sees nothing less; only the file on disk is blanked.
+#    The boxes are generous guesses at the HUD layout: check a few frames before sharing.
+#  * steps.jsonl never held text read from the screen (units, cards, elixir, towers only).
+HOLD_S = 4.0
+START_SKIP_S = 3.0
+NAME_BOXES = (
+    (0, 0, 260, 52),     # top-left: the opponent's name and clan (the clock, top right, stays)
+    (0, 498, 260, 532),  # bottom-left, between the arena and the hand: our name and clan
+)
+
+
+def blank_names(image, boxes=NAME_BOXES):
+    """A copy of a 368 x 652 screenshot with the name strips painted black (any size works:
+    the boxes are scaled)."""
+    img = image.convert("RGB").copy()
+    sx, sy = img.width / SHOT_W, img.height / SHOT_H
+    d = ImageDraw.Draw(img)
+    for x0, y0, x1, y1 in boxes:
+        d.rectangle((x0 * sx, y0 * sy, x1 * sx, y1 * sy), fill=(0, 0, 0))
+    return img
+
+
 class Recorder:
-    def __init__(self, root, meta: dict, annotate: bool = False):
+    def __init__(self, root, meta: dict, annotate: bool = False, private: bool = False):
         self.annotate = annotate
+        self.private = private
+        self._held = []  # private mode: (time, write job) not yet written
+        self._battle_t0 = None
         self.images: queue.Queue = queue.Queue(maxsize=64)
         threading.Thread(target=self._writer, daemon=True).start()
         self.dir = Path(root) / time.strftime("%Y%m%d-%H%M%S")
@@ -67,17 +101,45 @@ class Recorder:
             self.images.task_done()
 
     def _save(self, image, path, quality=85):
-        image = image.copy()
+        image = blank_names(image) if self.private else image.copy()
+        job = lambda: image.convert("RGB").save(path, quality=quality)  # noqa: E731
+        if self.private:
+            now = time.monotonic()
+            self._held.append((now, job))
+            self._release(now - HOLD_S)
+            return
+        self._put(job)
+
+    def _put(self, job):
         try:
-            self.images.put_nowait(lambda: image.convert("RGB").save(path, quality=quality))
+            self.images.put_nowait(job)
         except queue.Full:  # the disk cannot keep up: drop this frame, not the game
             pass
 
+    def _release(self, before):
+        """Private mode: write the held frames taken before ``before``."""
+        while self._held and self._held[0][0] <= before:
+            self._put(self._held.pop(0)[1])
+
+    def battle_started(self):
+        self._battle_t0 = time.monotonic()
+
+    def battle_over(self):
+        """Private mode: the held frames are the end of the battle; throw them away."""
+        self._held.clear()
+        self._battle_t0 = None
+
     def flush(self):
+        if not self.private:  # private: what is still held is the end of a battle; drop it
+            self._release(float("inf"))
+        self._held.clear()
         self.images.join()
 
     def frame(self, image, tag: str, every: int = 3, limit: int = 40):
-        """Save a raw frame (e.g. a screen the reader did not recognise), sparingly."""
+        """Save a raw frame (e.g. a screen the reader did not recognise), sparingly.
+        Never in private mode: such screens are menus, "VS" and results, with names."""
+        if self.private:
+            return
         n = self.tags = getattr(self, "tags", {})
         n[tag] = n.get(tag, 0) + 1
         if image is None or n[tag] % every != 1 or n[tag] > every * limit:
@@ -90,7 +152,10 @@ class Recorder:
     def step(self, image, state, view, decision: dict):
         self.n += 1
         stem = f"{self.n:05d}"
-        if image is not None:
+        if self.private and self._battle_t0 is None:
+            self.battle_started()
+        early = (self.private and time.monotonic() - self._battle_t0 < START_SKIP_S)
+        if image is not None and not early:
             self._save(image, self.dir / f"{stem}.jpg")
             if self.annotate:
                 self._save(self._annotated(image, state, view, decision),

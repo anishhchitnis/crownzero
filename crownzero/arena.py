@@ -106,17 +106,21 @@ def decks_for(deck_spec, seed: int):
     return [list(deck_spec), list(deck_spec)]
 
 
-def make_env(deck_names=DEFAULT_DECK) -> ClashParallelEnv:
+def make_env(deck_names=DEFAULT_DECK, delay: int = 0) -> ClashParallelEnv:
     """The shared env, set up for these decks. ``deck_names``: 8 names (a mirror match), or
     [blue, red] where each is 8 names or a ``FullDeck`` (with evolution / hero forms).
     The action space has the ability buttons after the tile actions, so heroes and
-    champions can use their abilities."""
+    champions can use their abilities.
+    ``delay``: the command delay in ticks (a play accepted now lands ``delay`` ticks later;
+    the live client's is 21-22, RoyaleSim's measurement). 0 lands it at once."""
     from .fulldecks import FullDeck, as_setup
 
-    if "env" not in _ENV:
-        _ENV["env"] = ClashParallelEnv(engine=RustEngine(),
-                                       action_parser=GridActionParser(ability_buttons=True))
-    env = _ENV["env"]
+    key = ("env", delay)
+    if key not in _ENV:
+        _ENV[key] = ClashParallelEnv(engine=RustEngine(),
+                                     action_parser=GridActionParser(ability_buttons=True),
+                                     command_delay_ticks=delay or None)
+    env = _ENV[key]
     if isinstance(deck_names, FullDeck):
         deck_names = [deck_names, deck_names]
     pair = deck_names if isinstance(deck_names, list) else [list(deck_names)] * 2
@@ -126,9 +130,9 @@ def make_env(deck_names=DEFAULT_DECK) -> ClashParallelEnv:
     return env
 
 
-def play_game(blue, red, seed: int, deck_names=DEFAULT_DECK):
+def play_game(blue, red, seed: int, deck_names=DEFAULT_DECK, delay: int = 0):
     """One battle. Returns (winner or None if cut short, ticks, crowns, seconds per bot)."""
-    env = make_env(deck_names)
+    env = make_env(deck_names, delay)
     bots = {"blue": blue, "red": red}
     rngs = {a: np.random.default_rng(seed * 2 + i) for i, a in enumerate(AGENTS)}
     spent = {"blue": 0.0, "red": 0.0}
@@ -148,13 +152,13 @@ def play_game(blue, red, seed: int, deck_names=DEFAULT_DECK):
 
 
 def _job(args):
-    spec_a, spec_b, seed, a_is_blue, deck = args
+    spec_a, spec_b, seed, a_is_blue, deck, delay = args
     a, b = make_bot(spec_a), make_bot(spec_b)
     blue, red = (a, b) if a_is_blue else (b, a)
     decks = decks_for(deck, seed)
     if not a_is_blue:  # A keeps its deck when it changes seat
         decks = decks[::-1]
-    winner, ticks, crowns, spent = play_game(blue, red, seed, decks)
+    winner, ticks, crowns, spent = play_game(blue, red, seed, decks, delay)
     a_seat = "blue" if a_is_blue else "red"
     if winner is None:
         outcome = "unfinished"
@@ -216,11 +220,12 @@ class Match:
 
 
 def match(spec_a, spec_b, games: int = 40, seed: int = 0, deck=DEFAULT_DECK,
-          workers: int | None = None, name_a: str | None = None, name_b: str | None = None):
+          workers: int | None = None, name_a: str | None = None, name_b: str | None = None,
+          delay: int = 0):
     per_seat = (games + 1) // 2
     from .fulldecks import FullDeck
     deck = deck if deck in ("random", "full", "special") or isinstance(deck, FullDeck) else tuple(deck)
-    jobs = [(spec_a, spec_b, seed + g, a_is_blue, deck)
+    jobs = [(spec_a, spec_b, seed + g, a_is_blue, deck, delay)
             for a_is_blue in (True, False) for g in range(per_seat)]
     workers = workers or mp.cpu_count()
     if workers == 1:  # in this process (no fork: torch may already be running threads)
