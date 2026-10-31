@@ -34,6 +34,7 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v3 | Live search: rebuild the board seen on screen in the simulator, search it every move | 18-2 against v1; 20-0 against defend and patient |
 | v4 | Any deck, any card; current card art; tower bars smoothed; deck mismatch warning | Fixes the misread hand found in real-game recordings |
 | v4.1 | Ignores arena decorations read as troops; our own deploying troops stay ours | Fixes the phantom defence found in the next recording |
+| v5.5 | A new unit detector, trained on generated images (`crownzero/detector/`, `--detector`); not yet trained or measured | Built because the eighth to tenth recordings all failed on what the screen reader saw |
 | v5.4 | The battle ends only after 5 s without a battle screen; a warning when the bot joins a battle already under way | Tenth recording: a 3.5 s stretch of unrecognised frames reset the clock and the memory mid-battle; the bot's first frame showed 10 elixir and a tower at 49% |
 | v5.3 | Keeps more elixir back while an enemy push is coming: one more elixir for every elixir of enemy troops on our half or within 7 rows of the river, up to 7 (`reserve_per_threat`) | Ninth recording: a Hog sent with the last 4 elixir as a Sparky and Minion Horde crossed the other bridge; the tower fell 5 s later. Simulator, the real-game brain under the client's delay: 23-7 against v5.2 [59%, 88%] |
 | v5.2 | Detections standing on a crown tower that still stands are dropped (the enemy's tower troops read as Bombers, a "Baby Dragon" on our King Tower) | Eighth recording: 2 phantom Bombers on all 277 frames, Hog Rider never played. Simulator, Hog 2.6 vs `defend` under the client's delay, same 8 seeds: with the phantoms 6-2 and 17 Hog plays; without 8-0 and 39 |
@@ -44,6 +45,27 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v4.4 | Sees destroyed towers (level badge gone) and the enemy King Tower's health; plays into the pocket once a tower falls (simulator: 19-21, but 5-0 in 3-crown wins); one-frame bar dips ignored; lighter recording, shorter pause after plays | Fixes the destroyed tower read as 3% for 2 minutes in the fifth recording (a 3-crown win) |
 | v4.3 | Fresh screenshots, one-drag plays checked against the hand, detector on 2 cores; summoned units valued by their size; buildings keep their side | Fixes the 41% of plays that never happened in the fourth recording, and the Goblin Hut overvalued; 15-15 against v4.2 in a mirror match with that deck |
 | v4.2 | Memory across frames (elixir after a play, ally/enemy vote, attackers hidden behind a tower); the opponent defends inside the look-ahead | Fixes the four mistakes found in the third recording (below); in the simulator 40-40 against v4.1 and 6-14 against full-information search, same as v4.1 |
+
+### A new unit detector (v5.5)
+
+Three recordings in a row lost to what Build-A-Bot's detector saw: tower troops read as
+Bombers, an Elixir Golem push read as five different cards, units flipping sides. Its model
+cannot be retrained (no training data ships with it), so `crownzero/detector/` builds a new one
+the way KataCR did (arXiv 2504.04783):
+
+| Step | How |
+|---|---|
+| Sprites | 4,654 units cut from real battles, both sides, 134 kinds incl. evolutions (KataCR's detection dataset, MIT) |
+| Arenas | The median of a recorded battle's frames: the units average away, the arena stays |
+| Training images | Towers, then 4-32 units pasted where they could stand, back to front, plus health bars, emotes and text it must ignore; exact boxes; one class per unit and side (276), so no separate side classifier |
+| Real frames | KataCR's hand-labelled frames: 8 folders added to training, one (557 frames, 7,163 boxes) kept out to measure on |
+| Model | YOLOv8, trained on the Mac's GPU (`mps`), exported to ONNX |
+| In the bot | `--detector models/units_cz.onnx`: same interface as Build-A-Bot's, towers and spells dropped, evolved units reported as their card |
+
+A one-epoch smoke run in the cloud found our King Tower in the right place on a recorded frame
+and dropped it as a tower; the real training runs on your Mac (`python -m
+crownzero.detector.build`, REAL_GAME.md). Not measured yet: accuracy on the held-out real
+frames, and a battle with it.
 
 ### Tenth recording (v5.3 → v5.4): the bot joined late
 
@@ -303,6 +325,7 @@ crownzero/search_bot.py      lookahead search (candidates, rollouts, scoring)
 crownzero/opponent_model.py  how the opponent answers inside the rollouts
 crownzero/live_search.py     rebuild a seen board in the simulator and search it
 crownzero/fulldecks.py       decks from the whole pool: evolutions, heroes, champions
+crownzero/detector/          the new unit detector: generated training images, YOLOv8
 scripts/eval_full_pool.py    search vs the scripted bots on full-pool decks
 scripts/exp_delay.py, exp_track.py, exp_lead.py   the v5 real-game A/Bs
 crownzero/features.py        what the bot sees (the same from the simulator and the screen)

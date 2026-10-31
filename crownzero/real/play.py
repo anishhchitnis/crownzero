@@ -494,6 +494,9 @@ def main():
                          "Build-A-Bot's video stream (can fall seconds behind)")
     ap.add_argument("--record", default=None, metavar="DIR",
                     help="save every frame, what was detected and what the bot did, to DIR")
+    ap.add_argument("--detector", default=None, metavar="ONNX",
+                    help="a unit detector trained with crownzero.detector (its classes.json "
+                         "beside it) instead of Build-A-Bot's")
     ap.add_argument("--private", action="store_true",
                     help="with --record: never save a player's name. Only mid-battle frames "
                          "are kept, the name strips are blacked out, the first and last "
@@ -553,6 +556,13 @@ def main():
     bot = make_bot_class(capture=args.capture)(make_actions(deck), config, net,
                                               args.play_threshold, recorder=recorder,
                                               live=live, input_mode=args.input)
+    if args.detector:
+        from ..detector.detector import CrownZeroUnits
+        path = Path(args.detector).expanduser()
+        if not path.exists():
+            raise SystemExit(f"--detector: no such file {path}")
+        bot.detector.unit_detector = CrownZeroUnits(path)
+        logger.info(f"unit detector: {path.name} (CrownZero's), not Build-A-Bot's")
     from .. import __version__
 
     logger.info(f"CrownZero v{__version__} ready with deck {deck}. Start a Training Camp battle; "

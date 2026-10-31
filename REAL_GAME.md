@@ -129,6 +129,23 @@ the layout, so open a few frames and check before sharing a recording.
 
 `Ctrl+C` stops it.
 
+## The new unit detector (optional, v5.5)
+
+CrownZero can use its own unit detector instead of Build-A-Bot's. Train it once on your Mac,
+from the crownzero folder with its virtual environment active:
+
+```bash
+pip install -e ".[sim,detector]"
+python -m crownzero.detector.build ~/Downloads/cr_detector --recordings ~/Downloads/cr_recordings --quick
+```
+
+`--quick` takes roughly 1-2 hours; without it, a night. It downloads about 700 MB of training
+data, and writes `models/units_cz.onnx`. Then add to the play command:
+
+```bash
+--detector ~/Downloads/crownzero/models/units_cz.onnx
+```
+
 ## Troubleshooting
 
 - **"No connected devices found"**: the emulator must be running before you start the bot.
