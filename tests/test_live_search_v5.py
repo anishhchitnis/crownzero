@@ -50,3 +50,16 @@ def test_live_search_with_delay_and_lag_decides():
     a = live.decide(v)
     assert isinstance(a, int) and a >= 0
     assert live.tracker.played == ["HogRider"]
+
+
+def test_threat_reserve_grows_with_an_incoming_push():
+    deck = ["HogRider", "Valkyrie", "Musketeer", "SkeletonArmy", "Tesla", "Log", "Fireball",
+            "BabyDragon"]
+    live = LiveSearch(deck, {"reserve": 1.0, "reserve_elixir": 4.0, "reserve_per_threat": 1.0})
+    v = View()
+    v.hand_names, v.next_name, v.elixir, v.clock = deck[:4], deck[4], 9.0, 0.3
+    live.decide(v)  # an empty board: the plain reserve
+    assert live.search._reserve_cap == 4.0
+    v.units, v.unit_names = [(0, -1, 3, 12, 0, 5.0)], ["Giant"]  # a Giant on our half
+    live.decide(v)
+    assert live.search._reserve_cap > 6.0  # 4 + about 5 elixir of Giant, capped at 7

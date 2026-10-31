@@ -40,7 +40,8 @@ DISPLAY_W, DISPLAY_H = 720, 1280  # Build-A-Bot's coordinate space
 # strength in simulator A/B tests, and it fixes a recorded elixir dump).
 # reserve_elixir 4: keep enough back for any 4-elixir answer (recorded 2026-10-13: the bot
 # spent down to 0-2 elixir in 307 of 426 decisions; simulator A/B against 3: 23-17)
-REAL_GAME_SEARCH = {"reply": "defender", "reserve": 1.0, "reserve_elixir": 4.0}
+REAL_GAME_SEARCH = {"reply": "defender", "reserve": 1.0, "reserve_elixir": 4.0,
+                    "reserve_per_threat": 1.0}  # v5.3: 23-7 against v5.2 (scripts/exp_threat.py)
 PRO_PRIOR = Path(__file__).resolve().parents[2] / "models" / "pro_prior.pt"
 
 

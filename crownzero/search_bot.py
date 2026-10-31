@@ -58,6 +58,7 @@ class SearchBot:
                  pocket_spots: bool = True, reserve: float = 0.0,
                  reserve_elixir: float = 3.0, prior=None, prior_weight: float = 0.3,
                  prior_k: int = 3, reserve_per_enemy: float = 0.0,
+                 reserve_per_threat: float = 0.0,
                  abilities: bool = True, lead_spells: bool = False) -> None:
         """``opponent``: an object with ``reply(state, team, mask) -> action``. When given,
         every rollout lets the opponent answer ``reply_ticks`` after our move (a two-ply
@@ -87,6 +88,11 @@ class SearchBot:
         # ... and more of them when the opponent has saved up for a push: the elixir kept
         # back is reserve_elixir + reserve_per_enemy * (their elixir - 5), within 1-6
         self.reserve_per_enemy = reserve_per_enemy
+        # ... and more of them while an enemy push is on its way: the elixir kept back grows
+        # by reserve_per_threat for every elixir of enemy troops heading into our half
+        # (recorded 2026-10-31: a Hog sent with the last 4 elixir as a Sparky and Minion
+        # Horde crossed the other bridge; the left tower fell 5 s later, unanswered).
+        self.reserve_per_threat = reserve_per_threat
         self._reserve_cap = reserve_elixir
         self.base_horizon = horizon_ticks
         # Look further ahead when enemy troops are on our side: a Giant at the bridge needs
@@ -120,6 +126,12 @@ class SearchBot:
             theirs = state.players[1 - team].elixir_milli / 1000
             self._reserve_cap = float(np.clip(
                 self.reserve_elixir + self.reserve_per_enemy * (theirs - 5.0), 1.0, 6.0))
+        if self.reserve_per_threat:
+            if self.arena is None:
+                self.arena = engine.arena()
+            threat = self._incoming(state, team)
+            self._reserve_cap = float(np.clip(
+                self._reserve_cap + self.reserve_per_threat * threat, 1.0, 7.0))
         self.horizon = self.base_horizon
         if self.defend_horizon != self.base_horizon:
             for ent in state.entities:
@@ -165,6 +177,16 @@ class SearchBot:
         self.rollouts += len(cands) + 1
         self.think_s += time.perf_counter() - t0
         return best_action
+
+    def _incoming(self, state, team: int) -> float:
+        """Elixir of enemy troops on our half or within 5 rows of the river, at their health."""
+        total = 0.0
+        for ent in state.entities:
+            if ent.team == team or is_tower(ent) or ent.kind != EntityKind.TROOP:
+                continue
+            if own_tile(self.arena, team, ent.x, ent.y)[1] < RIVER_Y + 7:
+                total += self._unit_value(ent) * ent.hp / max(ent.max_hp, 1)
+        return total
 
     def _fallback(self, state, team: int, cands: list[int]) -> int:
         """No search possible this decision: wait (0.5 s) and search again at the next one."""
