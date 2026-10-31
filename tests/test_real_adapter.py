@@ -90,3 +90,15 @@ def test_tower_troops_are_not_units():
     # the left tower stands (its troop dropped); the right one is destroyed, so a unit
     # where it stood is real; the king's "baby dragon" is dropped; the knight stays
     assert sorted((x, y) for _, _, x, y, _, _ in v.units) == [(9, 18), (13, 24)]
+
+
+def test_a_short_gap_mid_battle_is_not_the_end():
+    from crownzero.real.adapter import BattleEnd
+    b = BattleEnd(5.0)
+    assert not b.update(True, True, 0.0)
+    assert not b.update(False, True, 1.0)   # 3.5 s of unrecognised frames (recorded)
+    assert not b.update(False, True, 4.5)
+    assert not b.update(True, True, 5.0)    # back in the battle
+    assert not b.update(False, True, 6.0)
+    assert b.update(False, True, 11.5)      # 5.5 s without a battle screen: over
+    assert not b.update(False, False, 12.0)  # no battle running: nothing to end

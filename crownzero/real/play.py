@@ -26,7 +26,7 @@ from ..features import CARD_TYPES
 from ..model import load
 from ..student_bot import decide
 from . import cardmap
-from .adapter import (TYPE_TO_CARD, Clock, TowerTracker, decode, legal_mask,
+from .adapter import (TYPE_TO_CARD, BattleEnd, Clock, TowerTracker, decode, legal_mask,
                       playable_slots, view_from_state)
 from .device import PlayCheck, deploy, tune_detector, use_fresh_screenshots
 from .fairplay import FairPlay
@@ -40,6 +40,7 @@ DISPLAY_W, DISPLAY_H = 720, 1280  # Build-A-Bot's coordinate space
 # strength in simulator A/B tests, and it fixes a recorded elixir dump).
 # reserve_elixir 4: keep enough back for any 4-elixir answer (recorded 2026-10-13: the bot
 # spent down to 0-2 elixir in 307 of 426 decisions; simulator A/B against 3: 23-17)
+BATTLE_OVER_S = 5.0  # seconds without a battle screen before the battle counts as over
 REAL_GAME_SEARCH = {"reply": "defender", "reserve": 1.0, "reserve_elixir": 4.0,
                     "reserve_per_threat": 1.0}  # v5.3: 23-7 against v5.2 (scripts/exp_threat.py)
 PRO_PRIOR = Path(__file__).resolve().parents[2] / "models" / "pro_prior.pt"
@@ -261,7 +262,17 @@ def make_bot_class(capture: str = "screencap", tune: bool = True):
         def step(self, state):
             new_state = super().step(state)
             in_game = new_state is not None and new_state.screen == Screens.IN_GAME
-            if not in_game and self.clock.start is not None:  # the battle ended
+            # The battle is over only after BATTLE_OVER_S without a battle screen. Recorded
+            # 2026-10-31: one 3.5 s stretch of unrecognised frames mid-battle ended the
+            # "battle", resetting the clock (double elixir 2 minutes late) and the memory of
+            # towers, sides and the opponent's elixir.
+            if not hasattr(self, "battle_end"):
+                self.battle_end = BattleEnd(BATTLE_OVER_S)
+            over = self.battle_end.update(in_game, self.clock.start is not None,
+                                          time.monotonic())
+            if in_game and self.clock.start is None:
+                self._check_late_start(new_state)
+            if over:  # the battle ended
                 logger.info(f"battle over: {self.play_check.summary()}")
                 if self.recorder is not None:
                     self.recorder.battle_over()
@@ -271,7 +282,9 @@ def make_bot_class(capture: str = "screencap", tune: bool = True):
                 self.sides.reset()
                 self.hidden.reset()
                 self.enemy_elixir.reset()
-            self.clock.update(in_game)
+                self.clock.update(False)
+            elif in_game:
+                self.clock.update(True)
             if self.last_image is not None:
                 was = self.fair.sit_out
                 if self.fair.update(self.last_image, in_game) and not was:
@@ -284,6 +297,26 @@ def make_bot_class(capture: str = "screencap", tune: bool = True):
                     and new_state.screen == Screens.UNKNOWN):
                 self.recorder.frame(self.last_image, "unknown")  # to see what it misread
             return new_state
+
+        def _check_late_start(self, state):
+            """A battle starts with 5 elixir and full towers. Seeing 9+ elixir or a damaged
+            tower on the first battle frame means the battle began before the bot was ready
+            (recorded 2026-10-31: three battles in a row opened at 10 elixir, one with a tower
+            already at 49%), and the clock is behind."""
+            try:
+                n = state.numbers
+                elixir = float(n.elixir.number)
+                towers = [float(getattr(n, k).number) for k in (
+                    "left_ally_princess_hp", "right_ally_princess_hp",
+                    "left_enemy_princess_hp", "right_enemy_princess_hp")]
+            except (AttributeError, TypeError, ValueError):
+                return
+            if elixir >= 9 or min(towers) < 0.95:
+                logger.warning(
+                    "joined a battle already under way (elixir "
+                    f"{elixir:.0f}, towers {[round(t, 2) for t in towers]}): start the battle "
+                    "only after the 'ready' line, or the bot misses the opening and its clock "
+                    "is behind (double elixir comes later than it thinks)")
 
         def _handle_game_step(self, state):
             if state.screen != Screens.IN_GAME:  # e.g. the lobby: never tap there

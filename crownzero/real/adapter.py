@@ -64,6 +64,24 @@ class Clock:
                 t >= self.REGULATION_S)
 
 
+class BattleEnd:
+    """Has the battle ended? Only after ``after_s`` seconds without a battle screen: a few
+    unrecognised frames mid-battle (a popup, an emote, a slow screenshot) are not the end.
+    Recorded 2026-10-31: one 3.5 s stretch reset the clock and the memory mid-battle."""
+
+    def __init__(self, after_s: float = 5.0):
+        self.after_s = after_s
+        self.out_since = None
+
+    def update(self, in_game: bool, battle_running: bool, now: float) -> bool:
+        if in_game or not battle_running:
+            self.out_since = None
+            return False
+        if self.out_since is None:
+            self.out_since = now
+        return now - self.out_since >= self.after_s
+
+
 class TowerTracker:
     """Smooths the princess-tower health bars, and decides when a tower is gone.
 

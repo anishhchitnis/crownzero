@@ -34,6 +34,7 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v3 | Live search: rebuild the board seen on screen in the simulator, search it every move | 18-2 against v1; 20-0 against defend and patient |
 | v4 | Any deck, any card; current card art; tower bars smoothed; deck mismatch warning | Fixes the misread hand found in real-game recordings |
 | v4.1 | Ignores arena decorations read as troops; our own deploying troops stay ours | Fixes the phantom defence found in the next recording |
+| v5.4 | The battle ends only after 5 s without a battle screen; a warning when the bot joins a battle already under way | Tenth recording: a 3.5 s stretch of unrecognised frames reset the clock and the memory mid-battle; the bot's first frame showed 10 elixir and a tower at 49% |
 | v5.3 | Keeps more elixir back while an enemy push is coming: one more elixir for every elixir of enemy troops on our half or within 7 rows of the river, up to 7 (`reserve_per_threat`) | Ninth recording: a Hog sent with the last 4 elixir as a Sparky and Minion Horde crossed the other bridge; the tower fell 5 s later. Simulator, the real-game brain under the client's delay: 23-7 against v5.2 [59%, 88%] |
 | v5.2 | Detections standing on a crown tower that still stands are dropped (the enemy's tower troops read as Bombers, a "Baby Dragon" on our King Tower) | Eighth recording: 2 phantom Bombers on all 277 frames, Hog Rider never played. Simulator, Hog 2.6 vs `defend` under the client's delay, same 8 seeds: with the phantoms 6-2 and 17 Hog plays; without 8-0 and 39 |
 | v5 | The whole card pool: random legal decks from 125 ladder cards and 10 meta archetypes, with up to 2 evolutions, 1 hero and 1 champion (royalesim 0.1.42); the search presses hero and champion ability buttons; a snapshot the simulator cannot reload is skipped instead of crashing; `--private` recording; the live client's command delay and the screen's lag can be simulated | Full-pool decks: 49-1 against the 5 scripted bots (10 games each). Three real-game ideas, each 30 games under the client's delay: delay-aware look-ahead 13-17, tracking the opponent's cards 14-16, aiming spells ahead 16-14; none clear of chance, so all three stay off |
@@ -43,6 +44,16 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v4.4 | Sees destroyed towers (level badge gone) and the enemy King Tower's health; plays into the pocket once a tower falls (simulator: 19-21, but 5-0 in 3-crown wins); one-frame bar dips ignored; lighter recording, shorter pause after plays | Fixes the destroyed tower read as 3% for 2 minutes in the fifth recording (a 3-crown win) |
 | v4.3 | Fresh screenshots, one-drag plays checked against the hand, detector on 2 cores; summoned units valued by their size; buildings keep their side | Fixes the 41% of plays that never happened in the fourth recording, and the Goblin Hut overvalued; 15-15 against v4.2 in a mirror match with that deck |
 | v4.2 | Memory across frames (elixir after a play, ally/enemy vote, attackers hidden behind a tower); the opponent defends inside the look-ahead | Fixes the four mistakes found in the third recording (below); in the simulator 40-40 against v4.1 and 6-14 against full-information search, same as v4.1 |
+
+### Tenth recording (v5.3 → v5.4): the bot joined late
+
+61 decisions, 13 plays, both our princess towers lost to an Elixir Golem push.
+
+| Mistake | Cause | Fix |
+|---|---|---|
+| The opening was never played: the first frame showed 10 elixir and our right tower already at 49% | The battle was started before the bot printed "ready" (loading takes 10-20 s); the seventh to ninth battles also opened at 10 elixir | A warning when the first battle frame shows 9+ elixir or a damaged tower. Start the battle only after the "ready" line |
+| At 45 s the bot's clock went back to 0 and its memory of towers, sides and the opponent's elixir was wiped | 3.5 s of frames the screen reader did not recognise as the battle counted as the end of it | The battle is over only after 5 s without a battle screen (`adapter.BattleEnd`) |
+| The Elixir Golem push went unanswered | The screen reader called its units Elixir Golem, Electro Giant, Royal Giant, Giant and Knight in turn | The next work: a new detector |
 
 ### Ninth recording (v5.2 → v5.3): both towers lost in 83 seconds
 

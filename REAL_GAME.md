@@ -110,7 +110,8 @@ finds Build-A-Bot), with its virtual environment active:
 python -m crownzero.real.play --deck "Giant,Mini PEKKA,Fireball,Archers,Goblin Hut,Minions,Musketeer,Knight" --device-serial 127.0.0.1:5555
 ```
 
-Then open Training Camp in the game and start a battle. The bot waits on menus and plays
+Wait for the `CrownZero ... ready` line (10-20 s), then open Training Camp in the game and
+start a battle. A battle started before that line loses its opening, and the bot warns. The bot waits on menus and plays
 once the battle screen is up. Each play is logged, for example:
 
 ```
