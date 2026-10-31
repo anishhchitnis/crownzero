@@ -173,12 +173,38 @@ def in_arena(detection) -> bool:
     return 0 <= p.tile_x < NX and 0 <= p.tile_y < NY
 
 
+# Crown towers in our own frame, as tile boxes (x0, x1, y0, y1), inclusive.
+TOWER_BOXES = {
+    "own_king": (7, 10, 1, 4), "own_left": (2, 4, 5, 7), "own_right": (13, 15, 5, 7),
+    "enemy_king": (7, 10, 27, 30), "enemy_left": (2, 4, 24, 26), "enemy_right": (13, 15, 24, 26),
+}
+
+
+def on_tower(detection, standing: dict) -> bool:
+    """Is the detection on top of a crown tower that still stands? Nothing can stand
+    there; what the detector sees is the tower's own troop (the princess or another
+    tower troop) or the tower's art. Recorded 2026-10-30: the enemy's tower troops read as
+    two Bombers in front of its princess towers on all 277 frames, so every Hog Rider push
+    met two phantom Bombers in the look-ahead and the Hog was never played; a "Baby Dragon"
+    on our own King Tower drew Ice Spirits behind the king twice."""
+    p = detection.position
+    for name, (x0, x1, y0, y1) in TOWER_BOXES.items():
+        if standing.get(name, True) and x0 <= p.tile_x <= x1 and y0 <= p.tile_y <= y1:
+            return True
+    return False
+
+
 def view_from_state(state, clock: Clock, unknown_values: dict | None = None) -> View:
     """A View from a Build-A-Bot State."""
     v = View()
+    n = state.numbers
+    standing = {"own_left": float(n.left_ally_princess_hp.number) > 0,
+                "own_right": float(n.right_ally_princess_hp.number) > 0,
+                "enemy_left": float(n.left_enemy_princess_hp.number) > 0,
+                "enemy_right": float(n.right_enemy_princess_hp.number) > 0}
     for own, dets in ((True, state.allies), (False, state.enemies)):
         for d in dets:
-            if not in_arena(d):
+            if not in_arena(d) or on_tower(d, standing):
                 continue
             v.units.append(unit_row(d, own, unknown_values))
             v.unit_names.append(cardmap.unit_sim(_attr(d.unit, "name")))
@@ -187,7 +213,6 @@ def view_from_state(state, clock: Clock, unknown_values: dict | None = None) -> 
     v.hand = [TYPE_INDEX.get(CARD_TO_TYPE.get(_attr(c, "name"), ""), -1) for c in cards[1:5]]
     v.next_name = cardmap.sim_name(_attr(cards[0], "name"))
     v.hand_names = [cardmap.sim_name(_attr(c, "name")) for c in cards[1:5]]
-    n = state.numbers
     v.elixir = float(n.elixir.number)
     # Health bars are fractions already; a bar the reader cannot find reads 0 (destroyed).
     v.towers = [1.0, float(n.left_ally_princess_hp.number), float(n.right_ally_princess_hp.number),

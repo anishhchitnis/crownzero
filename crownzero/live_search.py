@@ -234,6 +234,10 @@ class LiveSearchBot:
         # SIMULATING THE SCREEN'S LAG: decide on the view from this many 0.5 s steps ago,
         # as the real bot does on a screenshot that is already old (for testing lag_steps)
         self.stale = int(kw.pop("stale_steps", 0))
+        # TESTING A MISREAD: enemy units (sim name, own-frame tile x, y) added to every view,
+        # as the screen reader added the enemy's tower troops (recorded 2026-10-30)
+        self.phantoms = list(kw.pop("phantoms", []))
+        self.plays = {}  # card name -> times played, for the experiments
         self._views = []
         self.search_kwargs = kw or None
         self.live = None
@@ -256,10 +260,16 @@ class LiveSearchBot:
         view.elixir = float(np.floor(view.elixir + 1e-6))  # the screen shows whole elixir
         if self.count_enemy:
             view.enemy_elixir = st.players[1 - team].elixir_milli / 1000
+        for name, x, y in self.phantoms:
+            view.units.append((0, -1, x, y, 0, 1.0))
+            view.unit_names.append(name)
         if self.stale:
             self._views.append(view)
             if len(self._views) <= self.stale:
                 return NOOP
             view = self._views.pop(0)
         a = self.live.decide(view)
+        if a != NOOP and mask[a] and a <= 4 * NX * NY:
+            card = view.hand_names[(a - 1) // (NX * NY)]
+            self.plays[card] = self.plays.get(card, 0) + 1
         return a if mask[a] else NOOP

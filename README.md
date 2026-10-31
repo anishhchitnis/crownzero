@@ -34,6 +34,7 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v3 | Live search: rebuild the board seen on screen in the simulator, search it every move | 18-2 against v1; 20-0 against defend and patient |
 | v4 | Any deck, any card; current card art; tower bars smoothed; deck mismatch warning | Fixes the misread hand found in real-game recordings |
 | v4.1 | Ignores arena decorations read as troops; our own deploying troops stay ours | Fixes the phantom defence found in the next recording |
+| v5.2 | Detections standing on a crown tower that still stands are dropped (the enemy's tower troops read as Bombers, a "Baby Dragon" on our King Tower) | Eighth recording: 2 phantom Bombers on all 277 frames, Hog Rider never played. Simulator, Hog 2.6 vs `defend` under the client's delay, same 8 seeds: with the phantoms 6-2 and 17 Hog plays; without 8-0 and 39 |
 | v5 | The whole card pool: random legal decks from 125 ladder cards and 10 meta archetypes, with up to 2 evolutions, 1 hero and 1 champion (royalesim 0.1.42); the search presses hero and champion ability buttons; a snapshot the simulator cannot reload is skipped instead of crashing; `--private` recording; the live client's command delay and the screen's lag can be simulated | Full-pool decks: 49-1 against the 5 scripted bots (10 games each). Three real-game ideas, each 30 games under the client's delay: delay-aware look-ahead 13-17, tracking the opponent's cards 14-16, aiming spells ahead 16-14; none clear of chance, so all three stay off |
 | v4.7 | Our own spawners' units stay ours; the pro prior only advises card kinds it has data for, and no building goes on the back row; a reserve of 4 elixir; the opponent's elixir counted (recorded only); sits out matchmade battles | Replaying the seventh battle: plays answering only our own Skeletons 7 → 1, our Skeletons read as enemies 450 → 175 frames (the rest come from the Tombstone the game moved, which the building rule now prevents), no Tombstone opener. Simulator: reserve 4 vs 3, 23-17; elixir counting 15-25 (recorded, not used) |
 | v4.6 | Learns from top players' replays: a replay reader (both players' plays: card, cost, tile, and the board before, rebuilt in the simulator) and a placement prior trained on them; the search tries the prior's top tiles for each card and leans toward them | Simulator A/B against v4.5, 40 games each, random decks: 26-14 (crowns 37-25), and 24-16 with the prior's tiles as candidates only |
@@ -41,6 +42,21 @@ unit health beyond what's drawn, no opponent hand or elixir.
 | v4.4 | Sees destroyed towers (level badge gone) and the enemy King Tower's health; plays into the pocket once a tower falls (simulator: 19-21, but 5-0 in 3-crown wins); one-frame bar dips ignored; lighter recording, shorter pause after plays | Fixes the destroyed tower read as 3% for 2 minutes in the fifth recording (a 3-crown win) |
 | v4.3 | Fresh screenshots, one-drag plays checked against the hand, detector on 2 cores; summoned units valued by their size; buildings keep their side | Fixes the 41% of plays that never happened in the fourth recording, and the Goblin Hut overvalued; 15-15 against v4.2 in a mirror match with that deck |
 | v4.2 | Memory across frames (elixir after a play, ally/enemy vote, attackers hidden behind a tower); the opponent defends inside the look-ahead | Fixes the four mistakes found in the third recording (below); in the simulator 40-40 against v4.1 and 6-14 against full-information search, same as v4.1 |
+
+### Eighth recording (v5.1 → v5.2): Hog 2.6 in a friendly, Hog Rider never played
+
+A friendly battle with `--private` (277 decisions, 56 plays, all of them happened; our right
+tower at 21%, the enemy's at 95% and 100%). The bot only defended: 15 Ice Spirits, 12
+Skeletons, 9 Logs, and the Hog Rider held in hand for 46 decisions without being played once.
+
+| Mistake | Cause | Fix |
+|---|---|---|
+| Hog Rider never played | The enemy's tower troops, standing on their princess towers, were read as two enemy Bombers on every frame. The rebuilt board put two Bombers in front of each tower, so every Hog push lost in the look-ahead | Nothing can stand on a crown tower: a detection inside a standing tower is the tower's own troop or art, and is dropped (`adapter.on_tower`). Reproduced in the simulator (above): with the phantoms the Hog was played 17 times in 8 games, without them 39 |
+| Ice Spirits played behind the King Tower at nothing, twice | A "Baby Dragon" read on our King Tower for 21 frames | Same rule |
+
+What is still wrong in it, for next time: 715 detections outside the arena (dropped), 23
+units flipping from ours to theirs, 104 of 1,108 hand slots read blank, and the screen reader
+taking 280 ms a frame. The screen reader is what needs work next.
 
 ### v5: the whole card pool, and what was tested for the real game
 

@@ -73,3 +73,20 @@ def test_mask_and_decode_round_trip():
     assert m[action_index(1, 25, 3)]         # Fireball anywhere
     assert not m[action_index(3, 5, 4)].any()  # Giant costs 5 > 4 elixir
     assert decode(action_index(2, 7, 11)) == (2, 11, 7)
+
+
+def test_tower_troops_are_not_units():
+    """Recorded 2026-10-30: the enemy's tower troops read as Bombers on every frame."""
+    from crownzero.real.adapter import view_from_state
+    num = lambda v: NS(number=v)  # noqa: E731
+    det = lambda name, x, y: NS(unit=NS(name=name, transport="ground", category="troop",  # noqa: E731
+                                        target="all"), position=NS(tile_x=x, tile_y=y))
+    numbers = NS(elixir=num(5), left_ally_princess_hp=num(1.0), right_ally_princess_hp=num(1.0),
+                 left_enemy_princess_hp=num(1.0), right_enemy_princess_hp=num(0.0))
+    state = NS(allies=[], enemies=[det("bomber", 2, 24), det("bomber", 13, 24),
+                                   det("baby_dragon", 7, 1), det("knight", 9, 18)],
+               cards=[NS(name="blank")] * 5, numbers=numbers, ready=[])
+    v = view_from_state(state, Clock(lambda: 0.0))
+    # the left tower stands (its troop dropped); the right one is destroyed, so a unit
+    # where it stood is real; the king's "baby dragon" is dropped; the knight stays
+    assert sorted((x, y) for _, _, x, y, _, _ in v.units) == [(9, 18), (13, 24)]
